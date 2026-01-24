@@ -2,24 +2,45 @@
 # RootFS Creation Script for ARM64
 # Builds a minimal BusyBox-based root filesystem
 
+# Enable strict error checking - script stops if any command fails
 set -e
 
+# SCRIPT_DIR: Get absolute path of this script's directory (jis folder mein ye script hai us folder ka path)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ROOTFS_DIR: Define where final root filesystem will be built (root filesystem banane ka location)
 ROOTFS_DIR="${SCRIPT_DIR}/../build/rootfs"
+
+# BUSYBOX_VERSION: Specify which BusyBox version to download (BusyBox ka version - ye Linux ka minimal version hai)
 BUSYBOX_VERSION="1.36.1"
+
+# BUSYBOX_DIR: Directory where BusyBox source code will be downloaded (BusyBox ki files yahan par aayengi)
 BUSYBOX_DIR="${SCRIPT_DIR}/../busybox"
+
+# OVERLAY_DIR: Directory containing custom configuration files to add to RootFS (custom files ke liye folder)
 OVERLAY_DIR="${SCRIPT_DIR}/../overlay"
 
+# ARCH: CPU architecture type - arm64 means 64-bit ARM (64-bit ARM wale processor ke liye)
 ARCH="arm64"
+
+# CROSS_COMPILE: ARM64 compiler prefix used for cross-compilation (ARM64 ke liye compiler ka naam - aarch64 wala)
 CROSS_COMPILE="aarch64-linux-gnu-"
 
+# Print welcome message with formatting (script start hone ka banner dikhao)
 echo "======================================"
 echo "MicroOS RootFS Build Script"
 echo "======================================"
 
-# Create directories
+# Step 1/6: Create all necessary directory structure (initial folders banao)
 echo "[1/6] Creating directory structure..."
+
+# mkdir -p: Create directories (recursively) with these paths (sab folders banao)
+# $ROOTFS_DIR/{bin,sbin,lib,usr/{bin,sbin,lib},etc,proc,sys,tmp,dev,var/{log,run}}
+# yani: bin, sbin, lib, usr/bin, usr/sbin, usr/lib, etc, proc, sys, tmp, dev, var/log, var/run
 mkdir -p $ROOTFS_DIR/{bin,sbin,lib,usr/{bin,sbin,lib},etc,proc,sys,tmp,dev,var/{log,run}}
+
+# chmod 1777: Set /tmp directory permissions (1777 = sticky bit + read/write for everyone)
+# /tmp sab ke liye readable aur writable ho taakay temporary files banaye ja saken
 chmod 1777 $ROOTFS_DIR/tmp
 
 # Create essential device nodes

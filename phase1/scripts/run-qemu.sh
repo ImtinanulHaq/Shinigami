@@ -1,10 +1,22 @@
 #!/bin/bash
 # Launch QEMU with Phase 1 system
+# Ye script QEMU (virtual machine) ko start karta hai aur MicroOS ko run karta hai
 
+# PHASE1_DIR: Current project ka main folder (jahan se ye script run ho raha hai us se ek level upar)
+# "${BASH_SOURCE[0]}" = is script ka name/path
+# dirname = directory ka name nikalo (script ke folder tak)
+# /.." = ek level upar jao (scripts folder se phase1 folder tak)
 PHASE1_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# KERNEL: Linux kernel image ka path (jo compiled kernel image hai ARM64 ke liye)
+# Image = Linux kernel binary jis ko QEMU boot karega
 KERNEL="$PHASE1_DIR/kernel/Image"
+
+# ROOTFS: Compressed root filesystem ka path (ye Linux ka complete filesystem hai - gzip se compress)
+# rootfs.cpio.gz = complete filesystem jo BusyBox aur middleware dono ke saath hai
 ROOTFS="$PHASE1_DIR/build/rootfs.cpio.gz"
 
+# Beautiful banner print karo taakay user ko pata chale kaunsa system start ho raha hai
 echo "╔═══════════════════════════════════════════════════╗"
 echo "║   MicroOS Phase 1 - QEMU Boot                     ║"
 echo "║   ARM64 virt machine                              ║"
