@@ -28,6 +28,13 @@ SOURCES = \
 	process_manager.cpp \
 	app_registry.cpp \
 	lifecycle_manager.cpp \
+	hardware_manager.cpp \
+	network_manager.cpp \
+	storage_manager.cpp \
+	power_manager.cpp \
+	security_manager.cpp \
+	media_manager.cpp \
+	system_services.cpp \
 	service_discovery.cpp \
 	commands_v2.cpp \
 	daemon.cpp
@@ -53,9 +60,9 @@ all: $(DAEMON) $(CLIENT)
 # ============================================================================
 # Build Daemon Binary
 # ============================================================================
-$(DAEMON): daemon.o process_manager.o app_registry.o lifecycle_manager.o service_discovery.o commands_v2.o
+$(DAEMON): daemon.o process_manager.o app_registry.o lifecycle_manager.o service_discovery.o commands_v2.o hardware_manager.o network_manager.o storage_manager.o power_manager.o security_manager.o media_manager.o system_services.o
 	@echo "Linking daemon..."
-	$(CXX) $(LDFLAGS) -o $(DAEMON) daemon.o process_manager.o app_registry.o lifecycle_manager.o service_discovery.o commands_v2.o
+	$(CXX) $(LDFLAGS) -o $(DAEMON) daemon.o process_manager.o app_registry.o lifecycle_manager.o service_discovery.o commands_v2.o hardware_manager.o network_manager.o storage_manager.o power_manager.o security_manager.o media_manager.o system_services.o
 	@echo "✓ Daemon built: $(DAEMON)"
 
 # ============================================================================
