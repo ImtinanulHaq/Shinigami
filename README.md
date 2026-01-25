@@ -286,9 +286,18 @@ cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase1
 
 ### Testing Phase 1
 ```bash
-# Run automated tests
+# Step 1: Rebuild RootFS (creates required directories)
 cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase1
-./scripts/test.sh
+bash rootfs/build-rootfs.sh
+# This ensures all required directories (proc, sys, tmp, var) are present
+
+# Step 2: Run automated tests
+bash scripts/test.sh
+
+# Expected output:
+# ✓ All tests passed! Ready for QEMU boot.
+#   Passed: 7
+#   Failed: 0
 
 # Check daemon status
 ps aux | grep daemon
@@ -299,6 +308,8 @@ tail -f /var/log/middleware.log
 # Stop daemon
 pkill daemon
 ```
+
+**Note**: If test shows missing directories (proc, sys, tmp, var), run the rootfs rebuild command above. These directories are created by the build script and are essential for the system to function properly.
 
 ### Verification Commands
 ```bash
