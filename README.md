@@ -601,34 +601,57 @@ formatResponse() → "App started successfully"
 ## Phase 2 CLI Commands & Usage
 
 ### Building Phase 2
+
+#### Option 1: Native x86_64 Compilation (Recommended for Testing)
 ```bash
-# Build Phase 2 with all managers
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2
-make clean && make -j$(nproc)
+# Build for your native x86_64 architecture
+cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2/middleware
+make ARCH=x86_64 clean-all && make ARCH=x86_64 -j$(nproc)
 
 # Output:
 # ✓ Compiled: process_manager.o
 # ✓ Compiled: app_registry.o
-# ✓ Compiled: service_discovery.o
-# ✓ Compiled: lifecycle_manager.o
-# ✓ Compiled: commands_v2.o
-# ✓ Daemon linked: 3.0 MB (ARM64 ELF statically linked)
-# ✓ Client linked: 2.8 MB (ARM64 ELF statically linked)
+# ... (all managers)
+# ✓ Daemon linked: 2.8 MB (x86-64 ELF statically linked)
+# ✓ Client linked: 2.7 MB (x86-64 ELF statically linked)
+```
+
+#### Option 2: ARM64 Cross-Compilation (For QEMU/Embedded)
+```bash
+# Build for ARM64 (requires aarch64-linux-gnu-gcc)
+cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2/middleware
+make ARCH=arm64 clean-all && make ARCH=arm64 -j$(nproc)
+
+# Output:
+# ✓ Daemon linked: 3.0 MB (ARM aarch64 ELF statically linked)
+# ✓ Client linked: 2.8 MB (ARM aarch64 ELF statically linked)
 ```
 
 ### Starting Phase 2 System
 ```bash
-# Terminal 1: Start daemon
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2
+# Terminal 1: Build and start daemon (x86_64)
+cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2/middleware
+make ARCH=x86_64 -j$(nproc)
+cd ..
 ./build/daemon &
 # Output: "Daemon started. Listening for connections..."
 
-# Terminal 2: Connect client
+# Terminal 2: Connect client (interactive)
 cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2
 ./build/client
 
-# You'll see interactive menu:
+# Interactive menu will appear with 8+ main categories
+
+# Terminal 3: Direct command testing
+cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2
+./build/client "ping"
+./build/client "status"
+./build/client "help"
 ```
+
+**Note**: The binaries are now compatible with both:
+- **x86_64 (native)**: Your development machine for direct testing
+- **ARM64**: For QEMU emulation and embedded systems (compile with `ARCH=arm64`)
 
 ### Phase 2 Interactive Menu System
 ```
