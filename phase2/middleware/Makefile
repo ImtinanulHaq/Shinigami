@@ -7,10 +7,19 @@
 # ============================================================================
 # Compiler Configuration
 # ============================================================================
-ARCH = arm64
-CROSS_COMPILE = aarch64-linux-gnu-
+# Detect architecture if not specified
+ARCH ?= arm64
+ifeq ($(ARCH),arm64)
+    CROSS_COMPILE = aarch64-linux-gnu-
+    CXXFLAGS = -std=c++17 -march=armv8-a -O2 -Wall -Wextra -static
+else ifeq ($(ARCH),x86_64)
+    CROSS_COMPILE = 
+    CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -static
+else
+    $(error Unknown architecture: $(ARCH). Use ARCH=arm64 or ARCH=x86_64)
+endif
+
 CXX = $(CROSS_COMPILE)g++
-CXXFLAGS = -std=c++17 -march=armv8-a -O2 -Wall -Wextra -static
 LDFLAGS = -static
 RM = rm -f
 
