@@ -15,7 +15,7 @@ static size_t _total_size(uint32_t capacity, uint32_t item_size)
 {
     return sizeof(ring_buffer_t) + ((size_t)capacity * item_size);
 }
-
+//create a newbuffer in shared memory
 ring_buffer_t* ring_buffer_create(const char* name,
                                    uint32_t    capacity,
                                    uint32_t    item_size)
