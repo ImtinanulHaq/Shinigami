@@ -62,16 +62,14 @@ typedef struct {
 // start the service manager daemon (blocks forever — runs the main loop)
 int  sm_run(void);
 
-// client-side: connect to service manager and register this service
+// client-side: one-shot calls (open connection, send, receive, close)
 int  sm_register(const char* name, const char* socket_path, const char* ring_name);
-
-// client-side: lookup a service, fills socket_path and ring_name buffers
 int  sm_lookup(const char* name, char* socket_path_out, char* ring_name_out);
-
-// client-side: send heartbeat (call every few seconds from your service)
 int  sm_heartbeat(const char* name);
-
-// client-side: unregister before clean shutdown
 int  sm_unregister(const char* name);
+
+// client-side: persistent connection (use when sending many messages)
+int  sm_connect_persistent(void);    // returns fd or -1
+void sm_disconnect(int fd);          // close when done
 
 #endif // SERVICE_MANAGER_H
