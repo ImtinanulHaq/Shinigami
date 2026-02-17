@@ -1,1763 +1,1432 @@
-# MicroOS - Professional Middleware & OS Architecture
+# Secure Linux Middleware — Complete Documentation
+### From Zero to Working System | Easy English | Step by Step
 
-**A comprehensive, production-grade middleware system built from foundation to advanced system management.**
-
----
-
-## 🎯 Project Vision
-
-Build a complete OS middleware system inspired by Android's architecture principles but with professional custom design. This project demonstrates enterprise-level implementation of:
-- Low-level kernel interaction and system initialization
-- Advanced process & service management with lifecycle control
-- Inter-Process Communication (IPC) mechanisms
-- Comprehensive security hardening and permission management
-- Professional system resource optimization and monitoring
-
-**Current Status**: Phase 1, Phase 2, and Phase 3 Complete ✅  
-**Implementation Level**: Production Ready (3.0MB daemon, 2.8MB client - ARM64 statically linked)
+> **Who is this for?**
+> You know C/C++ language basics but you don't know how to build a real system like this.
+> This document will teach you **everything** — what it is, why we do it, how to do it,
+> and what every piece of code/concept means.
 
 ---
 
-## 📋 Complete Architecture Overview
+## Table of Contents
+
+1. [What Are We Building?](#1-what-are-we-building)
+2. [Background Knowledge You Need First](#2-background-knowledge-you-need-first)
+3. [How Linux Works — The Basics](#3-how-linux-works--the-basics)
+4. [System Calls — The Most Important Concept](#4-system-calls--the-most-important-concept)
+5. [Processes — The Heart of Linux](#5-processes--the-heart-of-linux)
+6. [IPC — How Programs Talk to Each Other](#6-ipc--how-programs-talk-to-each-other)
+7. [Security Concepts You Must Know](#7-security-concepts-you-must-know)
+8. [Speed Concepts You Must Know](#8-speed-concepts-you-must-know)
+9. [Our Middleware Architecture — Full Explanation](#9-our-middleware-architecture--full-explanation)
+10. [Phase 1 — Ring Buffer (Zero Copy IPC)](#10-phase-1--ring-buffer-zero-copy-ipc)
+11. [Phase 2 — Service Manager](#11-phase-2--service-manager)
+12. [Phase 3 — Security Layer (seccomp + namespaces)](#12-phase-3--security-layer-seccomp--namespaces)
+13. [Phase 4 — HAL Layer](#13-phase-4--hal-layer)
+14. [Phase 5 — io_uring Event Loop](#14-phase-5--io_uring-event-loop)
+15. [Phase 6 — Services and Client Proxy](#15-phase-6--services-and-client-proxy)
+16. [Putting It All Together](#16-putting-it-all-together)
+17. [Build System — Makefile Explained](#17-build-system--makefile-explained)
+18. [Testing Your Middleware](#18-testing-your-middleware)
+19. [Common Errors and How to Fix Them](#19-common-errors-and-how-to-fix-them)
+20. [Full Project Folder Structure](#20-full-project-folder-structure)
+
+---
+
+## 1. What Are We Building?
+
+### Simple Explanation
+
+Think of our middleware like a **post office** inside a computer.
+
+- **Applications** are like people who want to send letters
+- **Hardware** (speakers, sensors, cameras) are like destinations
+- **Middleware** is the post office in between — it takes the letter, figures out where it goes, delivers it safely and fast
+
+Without middleware, every app would need to talk to hardware directly. That is messy, unsafe, and slow.
+
+### Android vs Our System
+
+Android has a middleware too. You use it every time you open an app on your phone. When you press the volume button, an Android middleware service called "AudioService" handles it. When your screen rotates, "SensorService" handles it.
+
+We are building the **same idea** but:
+- **No Java, no graphics** — pure C/C++ in the terminal
+- **Faster** — Android uses a system called "Binder IPC" which copies data 2 times. We will copy 0 times (called zero-copy)
+- **More secure** — each service will be locked in its own sandbox so it cannot harm other parts of the system
+
+### What Our System Will Do
 
 ```
-DEVELOPMENT ROADMAP:
-┌─────────────────────────────────────────────────────┐
-│   Phase 5: Optimization & Polish                    │
-│   (Performance, Battery, Logging, Monitoring)       │
-└─────────────────────────────────────────────────────┘
-                         ↑
-┌─────────────────────────────────────────────────────┐
-│   Phase 4: Security Layer                           │
-│   (Permissions, Sandboxing, Hardened Configs)       │
-└─────────────────────────────────────────────────────┘
-                         ↑
-┌─────────────────────────────────────────────────────┐
-│   Phase 3: Custom Design          ✅ COMPLETE       │
-│   (App Model, APIs, System Services)                │
-└─────────────────────────────────────────────────────┘
-                         ↑
-┌─────────────────────────────────────────────────────┐
-│   Phase 2: Android Principles      ✅ COMPLETE      │
-│   (Process Manager, IPC, Service Registry)          │
-└─────────────────────────────────────────────────────┘
-                         ↑
-┌─────────────────────────────────────────────────────┐
-│   Phase 1: Foundation              ✅ COMPLETE      │
-│   (Kernel, RootFS, Middleware Core)                 │
-└─────────────────────────────────────────────────────┘
-```
+BEFORE our middleware:
+App wants audio → App writes messy kernel code → Hope it works
 
----
-
-# 🔹 PHASE 1 - FOUNDATION (COMPLETE ✅)
-
-## Overview
-Phase 1 establishes the core infrastructure for the middleware system. It includes Linux kernel compilation for ARM64, a BusyBox-based root filesystem, and a basic middleware daemon with logging and command handling capabilities.
-
-## Phase 1 Goals Achieved
-- ✅ Linux kernel compiled for ARM64 architecture
-- ✅ QEMU ARM64 emulation environment fully configured
-- ✅ BusyBox-based RootFS with custom initialization
-- ✅ Custom init system with device tree support
-- ✅ Basic middleware daemon with socket communication
-- ✅ Professional logging system with timestamped output
-- ✅ Command parser and handler framework
-
----
-
-## Phase 1 Features Implemented
-
-### 1. **Kernel & Boot System**
-- **ARM64 Linux Kernel**: Custom compiled with minimal configuration for ARM64 (aarch64)
-- **Device Tree Support**: Proper ARM device tree blob (DTB) integration
-- **QEMU Integration**: Full compatibility with QEMU ARM64 system emulation
-- **Boot Flow**: Kernel → U-Boot → RootFS initialization
-
-### 2. **Root Filesystem (RootFS)**
-- **BusyBox Integration**: Complete busybox utility suite for embedded systems
-- **Standard Hierarchy**: FHS (Filesystem Hierarchy Standard) compliance
-- **Device Nodes**: Proper /dev structure with essential devices
-- **Init System**: Custom init.d scripts for service management
-- **Essential Binaries**: sh, ls, cat, grep, and 200+ utilities
-
-### 3. **Middleware Daemon (Phase 1)**
-- **Socket Communication**: Unix domain socket (/var/run/middleware.sock) for IPC
-- **Client-Server Architecture**: Persistent daemon with multi-client support
-- **Command Execution**: Execute system commands via client requests
-- **Error Handling**: Comprehensive error detection and reporting
-- **Graceful Shutdown**: SIGTERM and SIGINT signal handling
-
-### 4. **Logging System**
-- **Timestamped Logging**: All events logged with precise timestamps
-- **Log Levels**: INFO, WARNING, ERROR, DEBUG classification
-- **Persistent Storage**: Logs written to /var/log/middleware.log
-- **Rotation Support**: Basic log rotation mechanism
-- **Formatted Output**: Human-readable and machine-parseable format
-
-### 5. **Command Handler**
-- **Command Parser**: Parse client commands and parameters
-- **Built-in Commands**: help, status, info, exit, clear
-- **System Commands**: Pass-through to shell commands
-- **Response Format**: Structured command responses
-- **Error Messages**: Descriptive error handling
-
----
-
-## Phase 1 Files Used & Implementation Details
-
-### Core Files Created:
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `phase1/middleware/daemon.cpp` | 150+ | Main daemon process, socket server, request handler |
-| `phase1/middleware/daemon.hpp` | 50+ | Daemon class definition, structure declarations |
-| `phase1/middleware/client.cpp` | 120+ | Client application, command-line interface |
-| `phase1/middleware/commands.cpp` | 100+ | Command execution engine, parser logic |
-| `phase1/middleware/commands.hpp` | 40+ | Command definitions, function prototypes |
-| `phase1/middleware/logger.cpp` | 80+ | Logging implementation, file I/O, formatting |
-| `phase1/middleware/logger.hpp` | 35+ | Logger class interface |
-| `phase1/middleware/socket.cpp` | 90+ | Unix socket implementation, IPC logic |
-| `phase1/middleware/socket.hpp` | 45+ | Socket class definition |
-| `phase1/middleware/Makefile` | 60+ | Build configuration, cross-compilation flags |
-
-### Build System Files:
-```
-phase1/
-├── Makefile                    # Master build orchestration
-├── kernel/
-│   ├── arm64.config           # ARM64 Linux kernel configuration
-│   ├── build-kernel.sh        # Kernel compilation script
-│   └── Image                  # Compiled ARM64 kernel image
-├── rootfs/
-│   ├── build-rootfs.sh        # RootFS creation script
-│   └── scripts/mkrootfs.sh    # CPIO filesystem builder
-├── middleware/
-│   ├── daemon.cpp/hpp         # Daemon implementation
-│   ├── client.cpp             # Client CLI tool
-│   ├── commands.cpp/hpp       # Command system
-│   ├── logger.cpp/hpp         # Logging framework
-│   ├── socket.cpp/hpp         # Socket communication
-│   └── Makefile               # Middleware build rules
-├── build/
-│   ├── rootfs/                # Generated filesystem
-│   │   ├── bin/               # Binaries (daemon, client)
-│   │   ├── lib/               # Libraries and configurations
-│   │   ├── dev/               # Device nodes
-│   │   ├── etc/               # Configuration files
-│   │   └── init               # Init script
-│   └── daemon/client           # Compiled executables
-└── scripts/
-    ├── build.sh               # Build script
-    ├── run-qemu.sh            # QEMU launcher
-    └── test.sh                # Basic testing
+AFTER our middleware:
+App wants audio → App calls AudioProxy.play() → Middleware handles everything safely and fast
 ```
 
 ---
 
-## Phase 1 Structure Explanation
+## 2. Background Knowledge You Need First
 
+Before building anything, you need to understand these ideas. Do not skip this section.
+
+### 2.1 What is a Process?
+
+A **process** is a running program. When you type `./myprogram` in the terminal, Linux creates a process for it. Every process has:
+
+- Its own **memory** — other processes cannot read it (this is security)
+- A **Process ID (PID)** — a number that identifies it
+- **File descriptors** — numbers that represent open files, sockets, pipes
+
+### 2.2 What is a Daemon?
+
+A **daemon** is a process that runs in the background forever. It has no terminal attached. Examples:
+- `sshd` — waits for SSH connections
+- `cron` — runs scheduled tasks
+- Our middleware services will be daemons
+
+### 2.3 What is a File Descriptor?
+
+In Linux, **everything is a file**. A file descriptor (fd) is just an integer like `3` or `7` that represents:
+- An actual file on disk
+- A network socket
+- A pipe
+- A special device like `/dev/audio`
+
+When you open a file, Linux gives you a number. You use that number for all future operations:
 ```
-SYSTEM ARCHITECTURE:
-┌─────────────────────────────────────────────────────┐
-│                    CLIENT LAYER                      │
-│  (CLI Tool - phase1/build/client)                   │
-│  - User input handling                               │
-│  - Command formatting                                │
-│  - Response display                                  │
-└──────────────────┬──────────────────────────────────┘
-                   │ Unix Socket
-                   │ /var/run/middleware.sock
-                   ↓
-┌─────────────────────────────────────────────────────┐
-│                  DAEMON LAYER                        │
-│  (phase1/build/daemon - main service)               │
-│  ├─ Socket Server (listen on port)                  │
-│  ├─ Request Handler (parse commands)                │
-│  ├─ Command Executor (execute operations)           │
-│  └─ Response Generator (format output)              │
-└──────────────────┬──────────────────────────────────┘
-                   │
-        ┌──────────┼──────────┐
-        ↓          ↓          ↓
-   ┌─────────┬──────────┬──────────┐
-   │ Logging │ Commands │ Handlers │
-   │ System  │ Parser   │ Library  │
-   └────┬────┴──────────┴────┬─────┘
-        │                    │
-   /var/log/middleware.log   System Calls
-        │                    │
-        └────────┬───────────┘
-                 ↓
-        ┌──────────────────────┐
-        │  Kernel (Linux ARM64)│
-        └──────────────────────┘
+fd = open("/dev/audio", ...)   → Linux says "okay, this is fd number 5"
+write(5, data, size)           → write data to fd 5 (which is /dev/audio)
+close(5)                       → done, close fd 5
 ```
 
-**Key Components**:
-1. **Client**: Lightweight CLI tool connecting to daemon via sockets
-2. **Daemon**: Core service running continuously, handling all requests
-3. **Logger**: Asynchronous logging to disk with level filtering
-4. **Socket Layer**: Unix domain socket for efficient local IPC
-5. **Command System**: Extensible command parser and executor
+### 2.4 What is Memory-Mapped Memory (mmap)?
+
+Normal file reading: your program asks kernel → kernel copies data → your program has it. That is 2 steps, 1 copy.
+
+`mmap()` is different. It says: "Give me a pointer directly to a piece of memory/file. I will read/write it myself." Zero copies. This is how we achieve speed.
+
+Think of it like this:
+- Normal: You ask a librarian for a book → they bring you a photocopy
+- mmap: You walk directly to the shelf and read the book
 
 ---
 
-## Phase 1 Implementation Details
+## 3. How Linux Works — The Basics
 
-### Daemon Initialization Flow:
-```cpp
-main() → 
-  Logger::init("/var/log/middleware.log") → 
-    Daemon::start() →
-      Socket::bind("/var/run/middleware.sock") →
-        wait_for_clients() →
-          parse_command() →
-            execute_handler() →
-              send_response()
+### 3.1 Kernel Space vs User Space
+
+Linux is divided into two worlds:
+
+```
+┌─────────────────────────────────────┐
+│          USER SPACE                 │
+│   Your apps, our middleware, etc.   │
+│   Cannot touch hardware directly    │
+│   Cannot access other process memory│
+└────────────────┬────────────────────┘
+                 │  System Calls (the only bridge)
+┌────────────────▼────────────────────┐
+│          KERNEL SPACE               │
+│   Linux Kernel                      │
+│   Controls ALL hardware             │
+│   Controls ALL memory               │
+│   Controls ALL processes            │
+└─────────────────────────────────────┘
 ```
 
-### Command Execution Pipeline:
-```
-Client Input → TCP/Socket → Daemon Server → Command Parser → 
-  Handler Selection → Command Execute → Logger → Response Format → Send to Client
-```
+**Why this separation?** Security. If your app crashes, the kernel keeps running. If your app tries to do something evil, the kernel blocks it.
 
-### Key Technologies Used:
-- **IPC**: Unix domain sockets (AF_UNIX)
-- **Threading**: Multi-threaded server handling multiple clients
-- **Signals**: SIGTERM, SIGINT for graceful shutdown
-- **File I/O**: POSIX file operations for logging
-- **Cross-Compilation**: ARM64 aarch64-linux-gnu toolchain
+### 3.2 The /proc and /sys Filesystems
+
+These are not real files on disk. They are windows into the kernel:
+
+- `/proc/1234/` — information about process with PID 1234
+- `/proc/meminfo` — current memory usage
+- `/sys/bus/usb/` — all connected USB devices
+- `/dev/` — device files (audio, video, sensors, etc.)
+
+Our middleware will read these to talk to hardware.
+
+### 3.3 Linux Namespaces — Isolation Rooms
+
+Imagine you rent an apartment. You have your own bedroom, bathroom, kitchen — your own small world inside the building.
+
+Linux namespaces do this for processes. We can give a service its own:
+- PID namespace — it thinks it is the only process running
+- Network namespace — it has its own network, cannot see others
+- Mount namespace — it has its own filesystem view
+- User namespace — it has its own users
+
+We will use this to sandbox our services. Even if a service gets hacked, it cannot see or affect other services.
 
 ---
 
-## Phase 1 CLI Commands & Usage
+## 4. System Calls — The Most Important Concept
 
-### Building Phase 1
-```bash
-# Build everything for Phase 1
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase1
-make clean && make -j$(nproc)
+### What is a System Call?
 
-# Output:
-# ✓ Kernel compiled: phase1/kernel/Image
-# ✓ RootFS created: phase1/build/rootfs/
-# ✓ Daemon built: phase1/build/daemon
-# ✓ Client built: phase1/build/client
+A **syscall** is the ONLY way a user-space program can ask the kernel to do something. Every time you:
+- Open a file → `open()` syscall
+- Write to socket → `write()` or `send()` syscall
+- Create a process → `fork()` or `clone()` syscall
+- Allocate memory → `mmap()` syscall
+
+You are making a system call. Under the hood, your C standard library wraps these. `printf()` eventually calls `write()`. `malloc()` eventually calls `mmap()` or `brk()`.
+
+### The Important Syscalls for Our Middleware
+
+| Category | Syscall | What it does |
+|----------|---------|--------------|
+| Processes | `fork()` | Create a copy of current process |
+| Processes | `clone()` | Create process with specific namespaces |
+| Processes | `execve()` | Replace current process with a new program |
+| Processes | `waitpid()` | Wait for a child process to finish |
+| IPC | `socket()` | Create a network/Unix socket |
+| IPC | `bind()` | Attach socket to an address |
+| IPC | `accept()` | Accept an incoming connection |
+| IPC | `send()` / `recv()` | Send and receive data |
+| Memory | `mmap()` | Map memory / file into address space |
+| Memory | `munmap()` | Unmap memory |
+| Memory | `mprotect()` | Set memory read/write/execute permissions |
+| I/O | `read()` / `write()` | Read from / write to file descriptor |
+| I/O | `open()` / `close()` | Open and close files |
+| I/O | `ioctl()` | Send control commands to devices |
+| I/O | `epoll_create()` | Create event monitor |
+| I/O | `epoll_wait()` | Wait for events on multiple fds |
+| Security | `seccomp()` | Filter which syscalls a process can make |
+| Security | `prctl()` | Control process properties |
+| Security | `capset()` | Set process capabilities |
+| Signals | `sigaction()` | Register signal handlers |
+| Signals | `kill()` | Send signal to process |
+| Threads | `pthread_create()` | Create a new thread |
+| Threads | `pthread_mutex_lock()` | Lock a mutex |
+| Time | `timerfd_create()` | Create a timer as a file descriptor |
+
+### How to Look Up Any Syscall
+
+On your Linux terminal, type:
 ```
-
-### Starting Phase 1 System
-```bash
-# Option 1: Run with QEMU
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase1
-./scripts/run-qemu.sh
-
-# Option 2: Run daemon locally (testing)
-./build/daemon &
-# Daemon starts on background, listening on /var/run/middleware.sock
+man 2 open
+man 2 mmap
+man 2 socket
 ```
-
-### Using Phase 1 Client
-```bash
-# Option 1: Connect to running daemon
-./phase1/build/client
-
-# Then in client CLI:
-> help                          # Show all available commands
-> status                        # Get daemon status
-> info                          # Get system information
-> uptime                        # Get system uptime
-> date                          # Get current date/time
-> whoami                        # Get current user
-> pwd                           # Get current directory
-> ls                            # List files
-> ls -la                        # Detailed file listing
-> cat /etc/hostname             # Read hostname
-> echo "test"                   # Echo message
-> exit                          # Disconnect from daemon
-> quit                          # Same as exit
-
-# Option 2: Non-interactive command
-./phase1/build/client "status"
-./phase1/build/client "info"
-./phase1/build/client "uptime"
-```
-
-### Testing Phase 1
-```bash
-# Step 1: Rebuild RootFS (creates required directories)
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase1
-bash rootfs/build-rootfs.sh
-# This ensures all required directories (proc, sys, tmp, var) are present
-
-# Step 2: Run automated tests
-bash scripts/test.sh
-
-# Expected output:
-# ✓ All tests passed! Ready for QEMU boot.
-#   Passed: 7
-#   Failed: 0
-
-# Check daemon status
-ps aux | grep daemon
-
-# View logs
-tail -f /var/log/middleware.log
-
-# Stop daemon
-pkill daemon
-```
-
-**Note**: If test shows missing directories (proc, sys, tmp, var), run the rootfs rebuild command above. These directories are created by the build script and are essential for the system to function properly.
-
-### Verification Commands
-```bash
-# Verify compilation
-file phase1/build/daemon
-# Expected: ELF 64-bit LSB executable, ARM aarch64, statically linked
-
-file phase1/build/client
-# Expected: ELF 64-bit LSB executable, ARM aarch64, statically linked
-
-# Check binary sizes
-ls -lh phase1/build/daemon phase1/build/client
-
-# Test socket communication
-nc -U /var/run/middleware.sock
-```
+The `2` means "Section 2 = System Calls". This is your best reference.
 
 ---
 
----
+## 5. Processes — The Heart of Linux
 
-# 🔹 PHASE 2 - ANDROID PRINCIPLES (COMPLETE ✅)
+### 5.1 Creating Processes with fork()
 
-## Overview
-Phase 2 implements core Android architectural patterns: Process Manager for app lifecycle management, advanced IPC mechanisms, and a Service Registry for service discovery. This phase elevates the middleware from basic command handling to a full-featured application management system.
+`fork()` creates an exact copy of the current process. The original is the **parent**, the copy is the **child**. They run simultaneously.
 
-## Phase 2 Goals Achieved
-- ✅ Comprehensive Process Manager with app lifecycle control
-- ✅ Advanced IPC system with multiple communication mechanisms
-- ✅ Service Registry with discovery and dependency management
-- ✅ Application configuration and metadata system
-- ✅ Interactive multi-option client menu system
-- ✅ 43+ professional middleware commands
-- ✅ Enhanced daemon with comprehensive logging
-- ✅ Request counting and performance monitoring
+```
+fork() returns:
+  - In parent: the child's PID (a positive number like 1234)
+  - In child: 0
+  - On error: -1
+```
 
----
+**How to use fork():**
+```
+pid = fork()
+if pid == 0:
+    → You are the child. Do child work here.
+if pid > 0:
+    → You are the parent. You know child's PID.
+if pid == -1:
+    → Error. Fork failed.
+```
 
-## Phase 2 Features Implemented
+### 5.2 Creating a Daemon Process
 
-### 1. **Process Manager** 
-- **App Lifecycle Management**: START → RUNNING → PAUSED → STOPPED lifecycle states
-- **Process Spawning**: Create and manage child processes with resource isolation
-- **Process Monitoring**: Track CPU, memory, file descriptors per process
-- **PID Management**: Full process tracking with parent-child relationships
-- **Signal Handling**: Send signals to processes (SIGTERM, SIGKILL, SIGPAUSE)
-- **Process Termination**: Graceful shutdown with timeout and forceful kill
-- **State Tracking**: Real-time process state monitoring
-- **Resource Limits**: Memory and CPU constraints per application
+A daemon must:
+1. Fork from its parent (so the terminal does not wait for it)
+2. Call `setsid()` to become a session leader (detach from terminal)
+3. Fork again (prevents re-acquiring a terminal)
+4. Change directory to `/` (so it does not block any mounted filesystem)
+5. Close file descriptors 0, 1, 2 (stdin, stdout, stderr)
+6. Open `/dev/null` for stdin, stdout, stderr
 
-### 2. **Service Registry & Discovery**
-- **Service Registration**: Register services with unique identifiers
-- **Service Unregistration**: Remove services cleanly
-- **Service Discovery**: Query available services by name or type
-- **Dependency Management**: Track service dependencies
-- **Service Status**: Real-time status checking (AVAILABLE, UNAVAILABLE, CRASHED)
-- **Service Binding**: Client-service binding mechanism
-- **Event Notifications**: Notify clients of service state changes
-- **Multi-version Support**: Support multiple versions of same service
+We will do exactly this for every service in our middleware.
 
-### 3. **Application Registry**
-- **App Metadata Storage**: Store app name, package, version, permissions
-- **App Configuration**: Dynamic app-specific settings
-- **Package Management**: Register/unregister app packages
-- **Version Control**: Track app versions and updates
-- **Dependency Tracking**: App interdependencies
-- **Signature Verification**: Basic app signature checking
+### 5.3 Process States
 
-### 4. **Enhanced IPC System**
-- **Unix Sockets**: Efficient local communication (from Phase 1)
-- **Pipes**: Anonymous pipes for parent-child processes
-- **Message Passing**: Structured message format with headers
-- **Async Communication**: Non-blocking message delivery
-- **Message Queuing**: Queue management for high-load scenarios
-- **Broadcast**: One-to-many messaging capability
-- **Serialization**: Binary protocol for message encoding
+A process can be in these states:
+- **Running** — currently executing on CPU
+- **Sleeping** — waiting for something (I/O, timer, lock)
+- **Stopped** — paused by signal
+- **Zombie** — finished but parent has not called waitpid() yet
 
-### 5. **Interactive Client Menu System**
-- **Main Menu**: Easy navigation with numbered options
-- **Submenus**: Hierarchical menu structure
-- **Command History**: Remember last 50 commands
-- **Tab Completion**: Auto-complete for commands
-- **Help System**: Built-in help for every command
-- **Status Display**: Real-time daemon status updates
-- **Color Output**: Professional colored terminal output
+Our services will spend most time in **sleeping** state, waking up only when there is work to do. This is efficient — no busy-waiting.
 
-### 6. **Advanced Daemon Features**
-- **Request Counting**: Track total requests and commands executed
-- **Performance Logging**: Log timing information for commands
-- **Hot Reload**: Update configurations without restart
-- **Signal Handlers**: SIGUSR1 for status, SIGUSR2 for reload
-- **Crash Recovery**: Automatic recovery from service crashes
-- **Health Checks**: Regular system health monitoring
-- **Thread Pool**: Efficient request handling with worker threads
+### 5.4 Signals
+
+Signals are messages you can send to processes. Important ones:
+
+| Signal | Number | Meaning |
+|--------|--------|---------|
+| SIGTERM | 15 | Please stop gracefully |
+| SIGKILL | 9 | Stop immediately, cannot be ignored |
+| SIGHUP | 1 | Reload configuration |
+| SIGCHLD | 17 | Child process changed state |
+| SIGSEGV | 11 | Segmentation fault (memory error) |
+
+Our Service Manager will use signals to control services. When a service crashes, it sends SIGCHLD to the manager.
 
 ---
 
-## Phase 2 Files Used & Implementation Details
+## 6. IPC — How Programs Talk to Each Other
 
-### New Files Created:
+IPC means **Inter-Process Communication**. Processes have separate memory, so they need special ways to share data.
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `phase2/middleware/process_manager.cpp` | 220+ | App lifecycle, process control, resource tracking |
-| `phase2/middleware/process_manager.hpp` | 80+ | Process manager interface and structures |
-| `phase2/middleware/app_registry.cpp` | 180+ | App metadata storage, package management |
-| `phase2/middleware/app_registry.hpp` | 70+ | App registry interface |
-| `phase2/middleware/service_discovery.cpp` | 200+ | Service registry, discovery, binding |
-| `phase2/middleware/service_discovery.hpp` | 75+ | Service discovery interface |
-| `phase2/middleware/lifecycle_manager.cpp` | 150+ | App state transitions, lifecycle events |
-| `phase2/middleware/lifecycle_manager.hpp` | 60+ | Lifecycle management interface |
-| `phase2/middleware/commands_v2.cpp` | 450+ | 43+ professional middleware commands |
-| `phase2/middleware/commands_v2.hpp` | 50+ | Command definitions and prototypes |
-| `phase2/middleware/client.cpp` | 400+ | Interactive menu, client CLI with history |
-| `phase2/middleware/daemon.cpp` | 250+ | Enhanced daemon with managers, logging |
-| `phase2/middleware/Makefile` | 80+ | Build configuration for all components |
+### 6.1 Types of IPC — Comparison
 
-### Build System Enhancement:
+| Method | Speed | Use Case | Our Usage |
+|--------|-------|----------|-----------|
+| Pipes | Medium | Parent to child | Simple logging |
+| Unix Domain Sockets | Fast | Any two processes | Service Manager |
+| Shared Memory (mmap) | Fastest | High-bandwidth data | Ring Buffer (main IPC) |
+| POSIX Message Queues | Medium | Async messaging | Notifications |
+| TCP Sockets | Slow | Network communication | Not used internally |
+
+### 6.2 Unix Domain Sockets — How They Work
+
+A Unix Domain Socket is like a network socket but it lives in the filesystem as a file (like `/tmp/audio_service.sock`). It is much faster than TCP because there is no network stack involved.
+
+The flow:
 ```
-phase2/
-├── Makefile                           # Master build file
-├── build/
-│   ├── daemon                         # Enhanced daemon (3.0MB)
-│   ├── client                         # Interactive client (2.8MB)
-│   └── obj/                           # Compiled object files
-├── middleware/
-│   ├── daemon.cpp/hpp                 # Enhanced daemon + managers init
-│   ├── client.cpp                     # Interactive CLI with menus
-│   ├── commands_v2.cpp/hpp            # 43+ command implementations
-│   ├── process_manager.cpp/hpp        # App lifecycle management
-│   ├── lifecycle_manager.cpp/hpp      # State machine for apps
-│   ├── app_registry.cpp/hpp           # App package registry
-│   ├── service_discovery.cpp/hpp      # Service registry & binding
-│   └── Makefile                       # Compilation rules
-└── README.md                          # Phase 2 documentation
+SERVER SIDE:
+1. socket()  → create socket, get fd
+2. bind()    → attach to a path like /tmp/myservice.sock
+3. listen()  → start accepting connections
+4. accept()  → wait for client, get client_fd when connected
+5. recv()    → read data from client
+6. send()    → reply to client
+
+CLIENT SIDE:
+1. socket()  → create socket, get fd
+2. connect() → connect to /tmp/myservice.sock
+3. send()    → send request
+4. recv()    → read reply
 ```
+
+We will use this for our Service Manager (the central registry of services).
+
+### 6.3 Shared Memory — The Fast Way
+
+This is the key to our speed advantage. Instead of sending data through the kernel twice, we put it in a shared memory region that both processes can read and write directly.
+
+```
+NORMAL IPC (socket/pipe):
+App writes data → kernel copies to buffer → Service reads → kernel copies again
+TWO kernel crossings, TWO copies. SLOW.
+
+SHARED MEMORY:
+App writes to shared memory ─────────────────► Service reads from shared memory
+ZERO kernel crossings for data, ZERO copies. FAST.
+```
+
+How to create shared memory:
+```
+1. shm_open("/myshared", O_CREAT | O_RDWR, 0600)  → create shared memory object
+2. ftruncate(fd, SIZE)                             → set its size
+3. mmap(NULL, SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0) → map it into your process
+4. Now pointer you got from mmap() points to shared memory
+5. Both processes mmap() the same object → they see the same memory
+```
+
+### 6.4 Ring Buffer — The Data Structure for Fast IPC
+
+A ring buffer (also called circular buffer) is a fixed-size buffer that wraps around. It has two pointers:
+- **Head** — where new data is written
+- **Tail** — where data is read from
+
+```
+RING BUFFER (size = 8 slots):
+
+[ 0 ][ 1 ][ 2 ][ 3 ][ 4 ][ 5 ][ 6 ][ 7 ]
+         ↑ TAIL              ↑ HEAD
+         (read here)          (write here)
+
+Writer writes to HEAD, then moves HEAD forward.
+Reader reads from TAIL, then moves TAIL forward.
+When HEAD or TAIL reach the end, they wrap back to 0.
+No memory allocation. No copying. Extremely fast.
+```
+
+We will put this ring buffer in **shared memory** so two processes can communicate at maximum speed. This is our zero-copy IPC.
+
+### 6.5 Lock-Free Ring Buffer
+
+A lock-free ring buffer uses **atomic operations** instead of mutex locks. Why?
+
+- Mutex: Lock → Write → Unlock (3 steps, one thread at a time)
+- Atomic: Write atomically (1 step, no blocking)
+
+The key: `atomic_store()` and `atomic_load()` from `<stdatomic.h>` in C11. These are guaranteed to be thread-safe without needing a lock.
 
 ---
 
-## Phase 2 Structure Explanation
+## 7. Security Concepts You Must Know
+
+### 7.1 Linux Capabilities
+
+In old Linux, you were either `root` (can do anything) or not (limited). That was bad because a service only needs ONE special thing but with root it could do EVERYTHING.
+
+Linux Capabilities break root's powers into pieces. Examples:
+
+| Capability | What it allows |
+|------------|----------------|
+| CAP_NET_BIND_SERVICE | Bind to ports below 1024 |
+| CAP_SYS_RAWIO | Direct hardware I/O access |
+| CAP_SYS_ADMIN | Many admin operations |
+| CAP_KILL | Send signals to any process |
+| CAP_SETUID | Change process user ID |
+
+**Our approach:** Start as root, then drop ALL capabilities except the ones the specific service truly needs. An audio service only needs `CAP_SYS_RAWIO`. Nothing else. If it gets hacked, the attacker has very limited power.
+
+### 7.2 seccomp — Syscall Firewall
+
+seccomp (Secure Computing Mode) is a Linux feature that lets you **whitelist exactly which syscalls a process can make**. Any other syscall = the kernel kills the process immediately.
 
 ```
-LAYERED ARCHITECTURE:
+WITHOUT seccomp:
+Audio service can call: open, write, read, socket, fork, execve, ptrace, kill...
+(attacker can use ANY syscall to do evil things)
 
-┌─────────────────────────────────────────────────────┐
-│          CLIENT LAYER (Interactive UI)              │
-│  phase2/build/client                                │
-│  - Menu system with 8+ main categories              │
-│  - Command history (50 last commands)               │
-│  - Tab completion                                   │
-│  - Help system for all commands                     │
-└──────────────────┬──────────────────────────────────┘
-                   │ Socket Connection
-                   ↓
-┌─────────────────────────────────────────────────────┐
-│         DAEMON LAYER (Service Core)                 │
-│  phase2/build/daemon                                │
-│  Request Handler → Command Router → Manager Layer   │
-└──────────────────┬──────────────────────────────────┘
-                   │
-         ┌─────────┼─────────┐
-         ↓         ↓         ↓
-    ┌──────────┬──────────┬──────────┐
-    │ Commands │ Service  │ Process  │
-    │ v2 (43+) │ Registry │ Manager  │
-    │          │          │          │
-    │ - System │ - Bind   │ - Start  │
-    │ - App    │ - Query  │ - Stop   │
-    │ - Device │ - Status │ - Track  │
-    │ - Network│          │ - Monitor│
-    └────┬─────┴────┬─────┴────┬────┘
-         │          │          │
-    ┌────┴──────┬───┴──────┬───┴────┐
-    │ Lifecycle │   App    │ Service│
-    │ Manager   │ Registry │ Binding│
-    └───────────┴──────────┴────────┘
-         ↑          ↑          ↑
-         └──────────┼──────────┘
-                    │
-            /var/log/middleware.log
-            /var/run/middleware.sock
+WITH seccomp whitelist:
+Audio service can ONLY call: read, write, ioctl, mmap
+Any other syscall → SIGKILL immediately
+(attacker is completely trapped)
 ```
 
-**Key Architectural Components**:
+We implement this with `libseccomp` or directly using the `seccomp()` syscall with BPF (Berkeley Packet Filter) programs. A BPF program is a tiny program that runs in the kernel to decide: allow or deny.
 
-1. **Commands V2 System** (43+ commands across 8 categories):
-   - System Commands (10+): status, info, version, uptime, etc.
-   - App Commands (8+): start, stop, list, status, restart, etc.
-   - Service Commands (8+): register, unregister, bind, unbind, etc.
-   - Device Commands (6+): list, status, properties, reset, etc.
-   - Network Commands (6+): status, interfaces, ip, dns, etc.
-   - Storage Commands (5+): mount, unmount, df, du, etc.
-   - Power Commands (6+): battery, mode, status, shutdown, etc.
-   - Configuration Commands (8+): get, set, reload, list, etc.
+### 7.3 Linux Namespaces — Deep Dive
 
-2. **Manager Hierarchy**:
-   - **ProcessManager**: Controls app lifecycle (start/stop/pause/resume)
-   - **ServiceRegistry**: Manages service registration and discovery
-   - **AppRegistry**: Tracks application metadata
-   - **LifecycleManager**: State machine for app state transitions
+We introduced namespaces earlier. Let us go deeper:
 
-3. **Command Execution Flow**:
-   - Client sends command via socket
-   - Daemon parses command string
-   - Routes to appropriate manager
-   - Manager executes operation
-   - Response formatted and sent back
-   - Logged to /var/log/middleware.log
+**PID Namespace:** Service thinks it is PID 1. It cannot see any other processes. If it tries to signal another process, it cannot — because from its view, there are no other processes.
+
+**Network Namespace:** Service gets its own network stack. It has no internet, no connection to other services' network. Only what you explicitly give it through a virtual network interface.
+
+**Mount Namespace:** Service sees only the directories you give it. You give audio service only `/dev/snd` (sound device). It cannot see `/etc`, `/home`, `/var`. 
+
+**User Namespace:** Service thinks it is root inside its namespace but is actually an unprivileged user outside. Best of both worlds — service can do what it needs, but kernel knows it is not really root.
+
+### 7.4 Binary Signing — Trust Nobody
+
+When our Service Manager loads a service binary, it must verify it is authentic and has not been tampered with.
+
+Method: **HMAC-SHA256 signature**
+
+```
+At BUILD TIME:
+developer takes service binary → signs it with private key → produces signature file
+
+AT RUNTIME:
+Service Manager reads binary + signature file → verifies with public key
+→ match: load the service
+→ no match: REFUSE to run it, log the attempt
+```
+
+This prevents an attacker from replacing a service binary with a malicious one.
+
+### 7.5 Memory Protection
+
+- `mprotect()` sets memory regions as Read-Only or No-Execute
+- We mark code regions as `PROT_READ | PROT_EXEC` (no writing)
+- We mark data regions as `PROT_READ | PROT_WRITE` (no executing)
+- Stack gets a guard page: a region set to `PROT_NONE` — any access kills the process (prevents stack overflow attacks)
 
 ---
 
-## Phase 2 Implementation Details
+## 8. Speed Concepts You Must Know
 
-### Process Lifecycle State Machine:
-```
-        START
-         │
-         ↓
-    ┌─────────┐
-    │ INITIAL │
-    └────┬────┘
-         │
-         ↓
-    ┌─────────┐      pause()
-    │ RUNNING │◄─────────────┐
-    └────┬────┘              │
-         │                   │
-    stop()│         resume()  │
-         │         │         │
-         ↓         ↓         │
-    ┌─────────┐  ┌────────┐  │
-    │ STOPPED │  │ PAUSED ├──┘
-    └─────────┘  └────────┘
-```
+### 8.1 io_uring — The Fastest I/O in Linux
 
-### Service Discovery Flow:
+Traditional I/O is slow because:
+1. Your program calls `read()` → syscall
+2. Kernel reads data → copies to your buffer
+3. Your program continues
+
+Each syscall has overhead. For thousands of operations per second, this adds up.
+
+**io_uring** (introduced in Linux 5.1) works differently:
+1. Your program submits a batch of I/O requests to a **submission queue** (in shared memory)
+2. Kernel processes them all asynchronously
+3. Results appear in a **completion queue** (in shared memory)
+4. Your program collects results whenever ready
+
 ```
-App (Client) 
-    │
-    ├─ REQUEST: registerService("camera", "1.0")
-    │   ↓
-    ServiceRegistry.register()
-    │   ↓
-    EVENT: ServiceAvailable broadcast
-    │   ↓
-Other Apps notified
-    │
-    ├─ REQUEST: queryServices(type="camera")
-    │   ↓
-    ServiceRegistry.findByType()
-    │   ↓
-    RESPONSE: [camera v1.0, camera v2.0, ...]
-    │
-    ├─ REQUEST: bindService("camera", v1.0)
-    │   ↓
-    ServiceRegistry.bind()
-    │   ↓
-    RESPONSE: ServiceBinder (for communication)
+TRADITIONAL:
+App → syscall → wait → syscall → wait → syscall → wait
+   ↑ 3 syscalls, 3 waits
+
+io_uring:
+App → submit 3 requests at once → continue doing other work → collect 3 results
+   ↑ 1 syscall, 0 waits, results come in
 ```
 
-### Command Parser Architecture:
+This can make I/O 40-60% faster for high-throughput workloads.
+
+### 8.2 epoll — Efficient Event Monitoring
+
+Old way: check each file descriptor one by one → O(n) time
+`epoll`: Linux tells you exactly which fds have events → O(1) time
+
 ```
-Raw Input: "app start com.example.app"
-    │
-    ↓
-tokenize() → ["app", "start", "com.example.app"]
-    │
-    ↓
-detectCategory() → "app"
-    │
-    ↓
-getSubcommand() → "start"
-    │
-    ↓
-getArguments() → ["com.example.app"]
-    │
-    ↓
-findHandler() → AppManager.handleStart()
-    │
-    ↓
-execute() → ProcessManager.startApp("com.example.app")
-    │
-    ↓
-formatResponse() → "App started successfully"
+epoll_create() → create event monitor
+epoll_ctl()    → add/remove fds to monitor
+epoll_wait()   → sleep until something happens, wake up with list of active fds
 ```
 
----
+We use epoll in our event loop. The service manager sleeps until a client connects, a service sends a message, or a timer fires. No busy waiting, zero CPU usage while idle.
 
-## Phase 2 CLI Commands & Usage
+### 8.3 Memory Pool — No malloc in Hot Path
 
-### Building Phase 2
+`malloc()` and `free()` are slow because they must manage the heap, possibly call the kernel, handle fragmentation. In a high-speed IPC system, calling malloc for every message is too slow.
 
-#### Option 1: Native x86_64 Compilation (Recommended for Testing)
-```bash
-# Build for your native x86_64 architecture
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2/middleware
-make ARCH=x86_64 clean-all && make ARCH=x86_64 -j$(nproc)
+**Solution:** Pre-allocate a big pool at startup. Give out fixed-size chunks from the pool. Return them when done. No kernel calls, no fragmentation.
 
-# Output:
-# ✓ Compiled: process_manager.o
-# ✓ Compiled: app_registry.o
-# ... (all managers)
-# ✓ Daemon linked: 2.8 MB (x86-64 ELF statically linked)
-# ✓ Client linked: 2.7 MB (x86-64 ELF statically linked)
+```
+AT STARTUP:
+pool_init(1000 slots, each 256 bytes)  → allocate 256KB once
+
+DURING OPERATION:
+msg = pool_get()     → instant, just return pointer to next slot
+... use msg ...
+pool_return(msg)     → instant, mark slot as free
 ```
 
-#### Option 2: ARM64 Cross-Compilation (For QEMU/Embedded)
-```bash
-# Build for ARM64 (requires aarch64-linux-gnu-gcc)
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2/middleware
-make ARCH=arm64 clean-all && make ARCH=arm64 -j$(nproc)
+### 8.4 Avoid False Sharing — CPU Cache Lines
 
-# Output:
-# ✓ Daemon linked: 3.0 MB (ARM aarch64 ELF statically linked)
-# ✓ Client linked: 2.8 MB (ARM aarch64 ELF statically linked)
-```
+CPUs process memory in 64-byte chunks called **cache lines**. If two threads read/write different variables that happen to be in the same cache line, they fight over it even though they are using different variables. This is called **false sharing** and it is invisible but very slow.
 
-### Starting Phase 2 System
-```bash
-# Terminal 1: Build and start daemon (x86_64)
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2/middleware
-make ARCH=x86_64 -j$(nproc)
-cd ..
-./build/daemon &
-# Output: "Daemon started. Listening for connections..."
+**Solution:** Pad your shared data structures so each important variable is on its own cache line.
 
-# Terminal 2: Connect client (interactive)
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2
-./build/client
+```c
+// Bad: head and tail share a cache line
+struct ring {
+    int head;
+    int tail;
+};
 
-# Interactive menu will appear with 8+ main categories
-
-# Terminal 3: Direct command testing
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2
-./build/client "ping"
-./build/client "status"
-./build/client "help"
-```
-
-**Note**: The binaries are now compatible with both:
-- **x86_64 (native)**: Your development machine for direct testing
-- **ARM64**: For QEMU emulation and embedded systems (compile with `ARCH=arm64`)
-
-### Phase 2 Interactive Menu System
-```
-╔════════════════════════════════════════════════════════╗
-║       MicroOS Middleware - Interactive Control        ║
-╚════════════════════════════════════════════════════════╝
-
-Main Menu:
-  1. System Commands      (status, info, uptime, etc.)
-  2. Application Manager  (start, stop, list apps)
-  3. Service Manager      (register, bind, discover)
-  4. Device Control       (list, status, properties)
-  5. Network Tools        (interfaces, IP, DNS)
-  6. Storage Management   (mount, df, du)
-  7. Power Management     (battery, modes, shutdown)
-  8. Configuration        (get, set, reload)
-  9. Help & Documentation
-  0. Exit
-
-Select option (0-9): 1
-```
-
-### Phase 2 System Commands (Category 1)
-```bash
-# In client menu, select: 1 (System Commands)
-
-Available commands:
-  > status              # Show daemon status
-  > info                # System information
-  > version             # Middleware version
-  > uptime              # System uptime
-  > whoami              # Current user
-  > date                # Current date/time
-  > uname               # System name
-  > hostname            # Hostname
-  > requests            # Total requests processed
-  > help                # Show help
-
-Example usage:
-  > status
-  # Daemon Status: RUNNING
-  # Uptime: 2 hours 34 minutes
-  # Requests processed: 1,250
-```
-
-### Phase 2 Application Manager Commands (Category 2)
-```bash
-# In client menu, select: 2 (Application Manager)
-
-Available commands:
-  > app start <app_id>           # Start application
-  > app stop <app_id>            # Stop application
-  > app restart <app_id>         # Restart application
-  > app pause <app_id>           # Pause application
-  > app resume <app_id>          # Resume application
-  > app list                     # List all running apps
-  > app status <app_id>          # Get app status
-  > app info <app_id>            # Get app information
-  
-Example usage:
-  > app start com.example.camera
-  # Starting app: com.example.camera
-  # Process ID: 2451
-  # Status: RUNNING
-  
-  > app list
-  # Running Applications:
-  # 1. com.example.camera (PID: 2451, Status: RUNNING)
-  # 2. com.example.gallery (PID: 2452, Status: PAUSED)
-```
-
-### Phase 2 Service Manager Commands (Category 3)
-```bash
-# In client menu, select: 3 (Service Manager)
-
-Available commands:
-  > service register <name> <type> <version>    # Register service
-  > service unregister <name>                   # Unregister service
-  > service list                                # List all services
-  > service query <type>                        # Query services by type
-  > service bind <name>                         # Bind to service
-  > service unbind <name>                       # Unbind from service
-  > service status <name>                       # Get service status
-  > service info <name>                         # Get service details
-
-Example usage:
-  > service register camera camera.service 1.0
-  # Service registered successfully
-  # Service ID: srv_camera_1.0
-  
-  > service list
-  # Registered Services:
-  # 1. camera (v1.0) - AVAILABLE
-  # 2. location (v1.2) - AVAILABLE
-  # 3. connectivity (v2.0) - UNAVAILABLE
-```
-
-### Phase 2 Device Control Commands (Category 4)
-```bash
-# In client menu, select: 4 (Device Control)
-
-Available commands:
-  > device list                  # List all devices
-  > device status <device>       # Device status
-  > device properties <device>   # Device properties
-  > device enable <device>       # Enable device
-  > device disable <device>      # Disable device
-  > device reset <device>        # Reset device
-  > device info <device>         # Device information
-
-Example usage:
-  > device list
-  # Available Devices:
-  # - camera0 (status: enabled)
-  # - camera1 (status: disabled)
-  # - microphone0 (status: enabled)
-  # - speaker0 (status: enabled)
-```
-
-### Phase 2 Network Tools Commands (Category 5)
-```bash
-# In client menu, select: 5 (Network Tools)
-
-Available commands:
-  > network status               # Network status
-  > network interfaces           # List interfaces
-  > network ip <interface>       # Get IP address
-  > network dns                  # Show DNS servers
-  > network setdns <servers>     # Set DNS servers
-  > network ping <host>          # Ping host
-  > network route                # Show routing table
-
-Example usage:
-  > network interfaces
-  # Network Interfaces:
-  # - eth0: UP (192.168.1.100)
-  # - eth1: DOWN (not configured)
-  # - lo: UP (127.0.0.1)
-```
-
-### Phase 2 Storage Management Commands (Category 6)
-```bash
-# In client menu, select: 6 (Storage Management)
-
-Available commands:
-  > storage mount <device> <mountpoint>   # Mount device
-  > storage unmount <mountpoint>          # Unmount device
-  > storage df                            # Disk free space
-  > storage du <path>                     # Directory usage
-  > storage list                          # List devices
-  > storage format <device>               # Format device
-
-Example usage:
-  > storage df
-  # Filesystem    Size  Used Available Use%
-  # /dev/sda1     50G   12G    35G    25%
-  # /dev/sdb1     100G  45G    50G    45%
-```
-
-### Phase 2 Power Management Commands (Category 7)
-```bash
-# In client menu, select: 7 (Power Management)
-
-Available commands:
-  > power status                 # Battery status
-  > power level                  # Battery level
-  > power mode <mode>            # Set power mode
-  > power modes                  # List power modes
-  > power shutdown <delay>       # Shutdown system
-  > power reboot                 # Reboot system
-  > power sleep <duration>       # Enter sleep
-
-Example usage:
-  > power status
-  # Battery Level: 85%
-  # Status: Charging
-  # Temperature: 35°C
-  
-  > power mode POWER_SAVING
-  # Power mode changed to: POWER_SAVING
-```
-
-### Phase 2 Configuration Commands (Category 8)
-```bash
-# In client menu, select: 8 (Configuration)
-
-Available commands:
-  > config get <key>             # Get configuration value
-  > config set <key> <value>     # Set configuration value
-  > config list                  # List all configurations
-  > config reload                # Reload configurations
-  > config reset                 # Reset to defaults
-  > config export                # Export configurations
-  > config import <file>         # Import configurations
-
-Example usage:
-  > config get middleware.log.level
-  # middleware.log.level = INFO
-  
-  > config set middleware.log.level DEBUG
-  # Configuration updated successfully
-```
-
-### Phase 2 Command History & Help
-```bash
-# Command history in interactive client
-  > history                      # Show last 50 commands
-  > history clear                # Clear history
-  
-# Help system
-  > help                         # Show all available commands
-  > help app                     # Help for app commands
-  > help service                 # Help for service commands
-  > ?                            # Quick help
-```
-
-### Phase 2 Verification Commands
-```bash
-# Check daemon is running
-ps aux | grep daemon
-# Expected: ./build/daemon running
-
-# Check process count
-> status
-# Should show request count > 0
-
-# View middleware logs
-tail -f /var/log/middleware.log
-
-# Test with multiple commands
-> app start com.test.app
-> app list
-> service register test test.service 1.0
-> service list
-> device list
-> network interfaces
-> power status
-
-# Check command history
-> history
-
-# Stop everything
-> exit                         # Disconnect client
-pkill daemon                   # Stop daemon
+// Good: each is on its own 64-byte cache line
+struct ring {
+    int head;
+    char pad1[60];  // fill up to 64 bytes
+    int tail;
+    char pad2[60];
+};
 ```
 
 ---
 
----
+## 9. Our Middleware Architecture — Full Explanation
 
-# 🔹 PHASE 3 - PROFESSIONAL SYSTEM MANAGEMENT (COMPLETE ✅)
-
-## Overview
-Phase 3 represents the pinnacle of middleware functionality, implementing 7 comprehensive system manager classes with enterprise-level hardware control, networking, power management, security, and system services. This phase transforms the middleware into a production-grade system that can manage all aspects of a device.
-
-## Phase 3 Goals Achieved
-- ✅ Complete Hardware Management (15+ devices, full lifecycle control)
-- ✅ Enterprise-grade Network Management (WiFi, Cellular, VPN, DNS)
-- ✅ Professional Storage Management (mount, backup, indexing)
-- ✅ Advanced Power Management (4 power modes, thermal control, CPU scaling)
-- ✅ Comprehensive Security Management (11 permission types, biometric, encryption)
-- ✅ Professional Media Control (audio, video, haptics)
-- ✅ System-wide Services (logging, crashes, updates, sync, health checks)
-- ✅ Full Daemon Integration with all 7 managers
-- ✅ Production-ready compilation (3.0MB statically linked daemon)
-
----
-
-## Phase 3 Features Implemented
-
-### 1. **Hardware Manager** 
-**File**: `phase3/middleware/hardware_manager.cpp/hpp`
-**Purpose**: Complete hardware device control and management
-
-**Supported Devices**:
-- **Cameras**: camera0 (rear), camera1 (front) - start, stop, properties, zoom, flash
-- **Microphone**: mic0 - enable, disable, sensitivity settings
-- **Speaker**: speaker0 - enable, disable, volume control
-- **Bluetooth**: bt0 - enable, disable, scan, pair, connect
-- **WiFi**: wifi0 - enable, disable, scan networks, connect
-- **Sensors**:
-  - Accelerometer (accel0) - X/Y/Z axis reading, calibration
-  - Gyroscope (gyro0) - rotation measurement, calibration
-  - Proximity (proximity0) - distance detection
-  - Light (light0) - ambient light sensing
-- **Display**: display0 - brightness (0-100%), timeout, auto-rotate
-- **Touch**: touch0 - enable, disable, calibration, sensitivity
-- **GPS**: gps0 - enable, disable, location fix
-- **Battery**: battery0 - level, health, charging status
-- **Thermal**: thermal0 - temperature, throttling status
-
-**25+ Methods**:
-```cpp
-startCamera(), stopCamera(), getCameraProperties()
-enableBluetooth(), disableBluetooth(), scanBluetoothDevices()
-connectBluetooth(), enableSensor(), calibrateSensor()
-setSensorSensitivity(), setBrightness(), getDisplayStatus()
-calibrateTouchScreen(), enableTouchScreen(), getDeviceTemperature()
-setThermalThrottle(), getBatteryLevel(), getDeviceInfo()
-listAllDevices(), getDeviceStatus(), resetDevice()
-// ... and more
-```
-
-### 2. **Network Manager**
-**File**: `phase3/middleware/network_manager.cpp/hpp`
-**Purpose**: Complete networking stack management
-
-**Network Interfaces**:
-- **wlan0** (WiFi): Connect to networks, scan, signal strength
-- **rmnet0** (Cellular): Enable/disable, signal, mobile data
-- **bt0** (Bluetooth): Networking over Bluetooth
-
-**Features**:
-- WiFi operations (enable, scan, connect, disconnect, list networks)
-- Cellular management (enable, signal strength, mobile data toggle)
-- Bluetooth networking (enable, pair, connect)
-- VPN management (enable, disable, configure, status)
-- Network monitoring (interfaces, IP addresses, data usage)
-- DNS operations (set, resolve, ping, traceroute)
-- Bandwidth monitoring (per-interface data tracking)
-
-**20+ Methods**:
-```cpp
-enableWiFi(), disableWiFi(), scanWiFiNetworks(), connectToWiFi()
-getWiFiStatus(), enableCellular(), disableCellular()
-getCellularSignalStrength(), enableVPN(), disableVPN()
-configureVPN(), setDNS(), resolveDNS(), pingHost()
-getNetworkInterfaces(), getDataUsage(), getNetworkBandwidth()
-enableBluetooth(), disableBluetooth(), getNetworkStatus()
-// ... and more
-```
-
-### 3. **Storage Manager**
-**File**: `phase3/middleware/storage_manager.cpp/hpp`
-**Purpose**: File system and storage device management
-
-**Storage Devices**:
-- **Internal Storage**: 64GB capacity, mounted at /data
-- **External Storage**: 32GB capacity (microSD), mounted at /mnt/sdcard
-
-**Features**:
-- Device mounting/unmounting with format support
-- File operations (copy, move, delete, list)
-- Backup and restore functionality
-- Storage monitoring (usage, warnings, quotas)
-- Per-app cache management and system-wide cache
-- File indexing and searching
-- Directory size calculation
-
-**18+ Methods**:
-```cpp
-mountDevice(), unmountDevice(), formatDevice()
-copyFile(), moveFile(), deleteFile(), listFiles()
-createBackup(), restoreBackup(), listBackups()
-getStorageUsage(), clearCache(), getDeviceUsage()
-indexFiles(), searchFiles(), getCacheSize()
-deleteCacheByApp(), optimizeStorage(), getStorageInfo()
-// ... and more
-```
-
-### 4. **Power Manager**
-**File**: `phase3/middleware/power_manager.cpp/hpp`
-**Purpose**: Battery, CPU, thermal, and screen power management
-
-**Power Modes**:
-- **NORMAL**: Standard operation, full performance
-- **POWER_SAVING**: Reduced performance, extended battery (50% CPU, reduced brightness)
-- **ULTRA_POWER_SAVING**: Minimal operation, maximum battery (25% CPU, very low brightness)
-- **PERFORMANCE**: Maximum performance, ignoring battery (100% CPU, max brightness)
-
-**Features**:
-- Battery monitoring (level, health, charging state, temperature)
-- Power mode management with automatic switching
-- CPU frequency scaling (CPU throttling)
-- Thermal management (temperature monitoring, throttling triggers)
-- Screen power control (brightness, timeout, keep-on control)
-- Sleep/wake management
-- Power statistics and predictions
-
-**16+ Methods**:
-```cpp
-getPowerStatus(), getBatteryLevel(), getBatteryHealth()
-getChargingStatus(), setPowerMode(), getCurrentPowerMode()
-setCPUFrequency(), getCPUFrequency(), getDeviceTemperature()
-setThermalThrottle(), getScreenBrightness(), setScreenBrightness()
-getScreenTimeout(), setScreenTimeout(), enterSleep(), wakeDevice()
-// ... and more
-```
-
-### 5. **Security Manager**
-**File**: `phase3/middleware/security_manager.cpp/hpp`
-**Purpose**: Comprehensive security and permission management
-
-**Permission Types (11 Total)**:
-1. CAMERA - Photo and video recording
-2. MICROPHONE - Audio recording
-3. LOCATION - GPS and coarse location
-4. CONTACTS - Access to contacts database
-5. CALENDAR - Access to calendar data
-6. SMS - Send and receive messages
-7. CALL_LOG - Access to call history
-8. FILES - File system access
-9. BLUETOOTH - Bluetooth connectivity
-10. WIFI - WiFi connectivity
-11. STORAGE - Internal/external storage
-
-**Features**:
-- Permission management (grant, revoke, query)
-- Biometric authentication (fingerprint, FaceID)
-- PIN/password management
-- App security (signature verification, sandboxing)
-- Data encryption (full disk, per-file)
-- Secure storage (encrypted key-value store)
-- Security monitoring and audit
-
-**20+ Methods**:
-```cpp
-grantPermission(), revokePermission(), checkPermission()
-isPermissionGranted(), listPermissions(), setPermissionPolicy()
-authenticateFingerprint(), authenticateFaceID()
-verifyPIN(), changePIN(), enableDataEncryption()
-disableDataEncryption(), verifyAppSignature(), sandboxApp()
-disableSandbox(), getSecurityStatus(), auditSecurityEvent()
-// ... and more
-```
-
-### 6. **Media Manager**
-**File**: `phase3/middleware/media_manager.cpp/hpp`
-**Purpose**: Audio, video, and haptics control
-
-**Audio Routes** (4 outputs):
-- SPEAKER - Built-in speaker
-- HEADPHONE - Headphone jack
-- BLUETOOTH - Bluetooth audio
-- EARPIECE - Earpiece (phone call)
-
-**Features**:
-- Audio playback control (play, pause, stop, seek)
-- Video playback with quality settings
-- Volume control (0-100% per route)
-- Notification sounds and ringtones
-- Vibration patterns and haptic feedback
-- Audio routing management
-- Media metadata reading
-
-**18+ Methods**:
-```cpp
-playAudio(), pauseAudio(), stopAudio(), seekAudio()
-setVolume(), getVolume(), setAudioRoute(), getAudioRoute()
-playVideo(), pauseVideo(), stopVideo(), setVideoQuality()
-playNotificationSound(), playRingtone(), setRingtone()
-vibrate(), vibrationPattern(), setHapticFeedback()
-getMediaStatus(), getPlaybackPosition()
-// ... and more
-```
-
-### 7. **System Services**
-**File**: `phase3/middleware/system_services.cpp/hpp`
-**Purpose**: System-wide logging, updates, sync, and health checks
-
-**Features**:
-- Event logging (timestamps, levels, categorization)
-- Crash reporting (stack traces, app data, recovery)
-- System update checking and installation
-- Per-app update management
-- Cloud synchronization (contacts, calendar, photos)
-- System health checking and diagnostics
-- Maintenance tasks (optimize, cleanup, defragment)
-- Log rotation and management
-
-**22+ Methods**:
-```cpp
-logEvent(), setLogLevel(), getLogLevel()
-reportCrash(), getCrashReport(), listCrashReports()
-clearCrashReports(), checkForUpdates(), installSystemUpdate()
-updateAppList(), checkAppUpdates(), installAppUpdate()
-enableCloudSync(), disableCloudSync(), syncNow()
-getSyncStatus(), runHealthCheck(), getSystemDiagnostics()
-optimizeStorage(), cleanupCache(), defragmentStorage()
-// ... and more
-```
-
----
-
-## Phase 3 Files Used & Implementation Details
-
-### New Manager Files Created (7 Manager Classes):
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `phase3/middleware/hardware_manager.cpp` | 286 | Hardware device control (15+ devices) |
-| `phase3/middleware/hardware_manager.hpp` | 98 | Hardware manager interface |
-| `phase3/middleware/network_manager.cpp` | 241 | Network operations (WiFi, cellular, VPN) |
-| `phase3/middleware/network_manager.hpp` | 68 | Network manager interface |
-| `phase3/middleware/storage_manager.cpp` | 218 | Storage and file operations |
-| `phase3/middleware/storage_manager.hpp` | 62 | Storage manager interface |
-| `phase3/middleware/power_manager.cpp` | 159 | Power, battery, thermal management |
-| `phase3/middleware/power_manager.hpp` | 50 | Power manager interface |
-| `phase3/middleware/security_manager.cpp` | 219 | Permissions and security |
-| `phase3/middleware/security_manager.hpp` | 70 | Security manager interface |
-| `phase3/middleware/media_manager.cpp` | 182 | Audio/video control |
-| `phase3/middleware/media_manager.hpp` | 55 | Media manager interface |
-| `phase3/middleware/system_services.cpp` | 239 | Updates, logs, health checks |
-| `phase3/middleware/system_services.hpp` | 66 | System services interface |
-
-**Total**: 2000+ lines of professional C++ code implementing 140+ methods across 7 manager classes
-
-### Integration with Daemon:
-```
-phase3/middleware/daemon.cpp:
-  - #include all 7 manager headers
-  - getInstance() calls for all managers
-  - Manager initialization logging
-  - Request routing to manager layer
-```
-
-### Build Configuration:
-```
-phase3/middleware/Makefile:
-  - Compilation rules for all 7 managers
-  - Linking rules including all manager object files
-  - Final daemon binary: 3.0MB ARM64 ELF
-  - Static linking for portability
-```
-
----
-
-## Phase 3 Structure Explanation
+### 9.1 The Big Picture
 
 ```
-COMPREHENSIVE SYSTEM ARCHITECTURE:
-
 ┌──────────────────────────────────────────────────────────────┐
-│                    CLIENT LAYER                              │
-│  (phase2/build/client with menu system - still valid)       │
-│  - Connect to daemon via socket                              │
-│  - Display manager status and responses                      │
-└────────────────────┬─────────────────────────────────────────┘
-                     │
-                     ↓
+│                    TERMINAL APPLICATIONS                     │
+│              app1          app2          app3                │
+│               │             │             │                  │
+│        AudioProxy    SensorProxy    CameraProxy              │
+│         (C++ class)  (C++ class)   (C++ class)              │
+└───────────────┬─────────────┬─────────────┬──────────────────┘
+                │             │             │
+                │    (Unix Socket — Register/Lookup)           │
+                ▼             ▼             ▼
 ┌──────────────────────────────────────────────────────────────┐
-│                 REQUEST ROUTER (Daemon)                      │
-│  phase3/build/daemon                                         │
-│  - Parse incoming command                                    │
-│  - Route to appropriate manager                              │
-│  - Execute operation                                         │
-│  - Format response                                           │
-└────────────────────┬─────────────────────────────────────────┘
-                     │
-        ┌────────────┼────────────┐
-        │            │            │
-        ↓            ↓            ↓
-    ┌────────────────────────────────────┐
-    │      7 PROFESSIONAL MANAGERS       │
-    │                                    │
-    │  1. HardwareManager (15+ devices) │
-    │  2. NetworkManager (WiFi, 4G)     │
-    │  3. StorageManager (mount, backup)│
-    │  4. PowerManager (4 power modes)  │
-    │  5. SecurityManager (11 perms)    │
-    │  6. MediaManager (audio/video)    │
-    │  7. SystemServices (logs, updates)│
-    └────────────────────────────────────┘
-        │            │            │
-        ↓            ↓            ↓
-    ┌─────────────────────────────────────────────┐
-    │      UNDERLYING SUBSYSTEMS                  │
-    │                                             │
-    │  System Calls → Kernel → Devices/Storage    │
-    │  IPC → Service Binding → Inter-app Comms    │
-    │  Logging → Database → Analytics             │
-    └─────────────────────────────────────────────┘
+│                   SERVICE MANAGER DAEMON                     │
+│            (The central registry — always running)           │
+│                                                              │
+│   - Knows where every service lives                          │
+│   - Verifies binary signatures before launching             │
+│   - Monitors service health                                  │
+│   - Restarts crashed services                               │
+└──────┬──────────────────┬──────────────────┬────────────────┘
+       │                  │                  │
+       │  Ring Buffer     │  Ring Buffer     │  Ring Buffer
+       │  (Shared Mem)    │  (Shared Mem)    │  (Shared Mem)
+       ▼                  ▼                  ▼
+┌────────────┐   ┌──────────────┐   ┌──────────────┐
+│  AUDIO     │   │   SENSOR     │   │   CAMERA     │
+│  SERVICE   │   │   SERVICE    │   │   SERVICE    │
+│  DAEMON    │   │   DAEMON     │   │   DAEMON     │
+│            │   │              │   │              │
+│ sandboxed  │   │  sandboxed   │   │  sandboxed   │
+│ seccomp    │   │  seccomp     │   │  seccomp     │
+│ namespace  │   │  namespace   │   │  namespace   │
+└─────┬──────┘   └──────┬───────┘   └──────┬───────┘
+      │                 │                  │
+      ▼                 ▼                  ▼
+┌──────────────────────────────────────────────────────────────┐
+│                       HAL LAYER (C)                          │
+│         audio_hal.c      sensor_hal.c     camera_hal.c       │
+│         (simple C structs with function pointers)            │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                   LINUX KERNEL                               │
+│    /dev/snd   /dev/video0   /sys/bus/iio   ioctl()           │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-**Architectural Strengths**:
+### 9.2 Data Flow — Step by Step
 
-1. **Manager Separation**: Each manager handles one domain (hardware, network, power, etc.)
-2. **Singleton Pattern**: Global access via getInstance() pattern, thread-safe
-3. **Comprehensive Coverage**: 140+ methods covering all major system functions
-4. **Professional Quality**: Error handling, logging, state tracking
-5. **Scalability**: Easy to add new managers without affecting existing ones
-6. **Testability**: Each manager can be tested independently
-7. **Maintainability**: Clear interfaces, organized code, documented APIs
+When an app wants to play audio:
+
+```
+Step 1: App calls AudioProxy::play("song.mp3")
+
+Step 2: AudioProxy writes request into Ring Buffer
+        (zero-copy — direct shared memory write)
+
+Step 3: Ring Buffer notifies Audio Service via eventfd
+        (one syscall — just writing number 1 to a fd)
+
+Step 4: Audio Service wakes up from epoll_wait()
+        (was sleeping, now active)
+
+Step 5: Audio Service reads request from Ring Buffer
+        (zero-copy — direct shared memory read)
+
+Step 6: Audio Service calls HAL:
+        audio_hal->play(data)
+
+Step 7: HAL calls kernel:
+        ioctl(audio_fd, AUDIO_PLAY_CMD, data)
+
+Step 8: Kernel sends audio to hardware
+
+Step 9: Audio Service writes result back to Ring Buffer
+
+Step 10: App reads result from Ring Buffer
+```
+
+Total kernel crossings for data: **2** (one eventfd write, one eventfd read)
+Data copies: **0**
+Compare to Android Binder: 4+ kernel crossings, 2 copies
 
 ---
 
-## Phase 3 Implementation Details
+## 10. Phase 1 — Ring Buffer (Zero Copy IPC)
 
-### Singleton Pattern Used Across All Managers:
-```cpp
-// Example: HardwareManager
-class HardwareManager {
-public:
-    static HardwareManager& getInstance() {
-        static HardwareManager instance;  // Thread-safe initialization
-        return instance;
-    }
-    
-    // Public API
-    bool startCamera(const std::string& cameraId);
-    bool stopCamera(const std::string& cameraId);
-    // ... more methods
-    
-private:
-    HardwareManager();  // Private constructor
-    std::map<std::string, HardwareDevice> devices;
-};
+### What Files to Create
 
-// Usage in daemon:
-HardwareManager& hwMgr = HardwareManager::getInstance();
-hwMgr.startCamera("camera0");
+```
+core/
+├── ring_buffer.h    — the struct definition and function declarations
+└── ring_buffer.c    — the implementation
 ```
 
-### Data Structures for State Management:
+### Understanding the ring_buffer.h File
 
-```cpp
-// Device representation
-struct HardwareDevice {
-    std::string device_id;
-    std::string device_type;
-    std::string state;          // "enabled", "disabled"
-    int power_consumption;      // mW
-    std::string firmware_version;
-};
+This header file defines the structure of our ring buffer and declares functions. Everything in this file goes into shared memory.
 
-// Network interface
-struct NetworkInterface {
-    std::string interface_name;  // eth0, wlan0, etc.
-    std::string ip_address;
-    std::string netmask;
-    bool is_up;
-    long data_sent;             // bytes
-    long data_received;         // bytes
-};
+**What fields we need in the struct:**
 
-// Permission tracking
-struct AppPermission {
-    std::string app_id;
-    std::string permission_type;  // CAMERA, MICROPHONE, etc.
-    std::string status;           // GRANTED, DENIED
-    std::string grant_time;
-};
+- `head` — atomic integer, position where next item will be written
+- `tail` — atomic integer, position where next item will be read
+- `capacity` — how many items the buffer can hold (set at creation, never changes)
+- `item_size` — how big each item is in bytes (set at creation, never changes)
+- `data[]` — a flexible array at the end where actual items are stored
+- `notify_fd` — an `eventfd` file descriptor to wake up sleeping readers
+- padding bytes between head and tail to avoid false sharing (64 bytes apart)
 
-// System log entry
-struct SystemLog {
-    std::string timestamp;
-    std::string level;            // INFO, WARNING, ERROR
-    std::string message;
-    std::string source;           // which manager
-};
+**Why atomic for head and tail?**
+
+Because one process writes head and another reads it. Without atomic, the CPU might give them a half-written value. `_Atomic int` from `<stdatomic.h>` guarantees they see the complete value.
+
+### Understanding the ring_buffer.c File
+
+**`ring_buffer_create()` function:**
+1. Calculate total size needed: `sizeof(ring_buffer_t) + capacity * item_size`
+2. Call `shm_open()` to create a named shared memory object like `/ring_audio`
+3. Call `ftruncate()` to set its size
+4. Call `mmap()` to map it into this process's address space — get a pointer back
+5. Initialize head=0, tail=0, capacity, item_size
+6. Create an `eventfd(0, EFD_NONBLOCK)` for notifications
+7. Return the pointer
+
+**`ring_buffer_write()` function:**
+1. Read current head (atomic load)
+2. Calculate next_head = (head + 1) % capacity
+3. Check if next_head == tail — if yes, buffer is FULL, return error
+4. Copy item into `data[head * item_size]`
+5. Atomically store next_head as new head
+6. Write 1 to eventfd to wake up reader
+
+**`ring_buffer_read()` function:**
+1. Read current tail (atomic load)
+2. If tail == head — buffer is EMPTY, return error
+3. Copy item from `data[tail * item_size]`
+4. Atomically store (tail+1) % capacity as new tail
+5. Return item
+
+**`ring_buffer_attach()` function:**
+Used by the second process (reader) to attach to existing shared memory:
+1. `shm_open("/ring_audio", O_RDWR, 0)` — open existing (no O_CREAT)
+2. `mmap()` — map into this process
+3. Return pointer — now both processes share the same memory
+
+### Key Things to Remember for ring_buffer.c
+
+- Use `__attribute__((aligned(64)))` on head and tail to ensure cache line alignment
+- Use `memory_order_acquire` when loading and `memory_order_release` when storing — this ensures proper visibility between processes
+- Link with `-lrt` (real-time library) because `shm_open()` requires it
+- Link with `-lpthread` because atomics may need it
+
+---
+
+## 11. Phase 2 — Service Manager
+
+### What Files to Create
+
+```
+core/
+├── service_manager.h    — struct definitions, constants, function declarations
+└── service_manager.c    — the main daemon implementation
 ```
 
-### Command-to-Manager Routing:
+### What the Service Manager Does
+
+Think of it as a **phonebook** + **security guard** + **health monitor**.
+
+- **Phonebook:** Services register their name and socket path. Clients look up service by name.
+- **Security guard:** Before starting a service, verify its binary signature.
+- **Health monitor:** If a service crashes, restart it.
+
+### The ServiceEntry Struct
+
+Each registered service has:
+- `name[64]` — service name like "audio" or "sensor"
+- `socket_path[128]` — path to service's Unix socket like `/tmp/audio.sock`
+- `pid` — process ID of the service daemon
+- `ring_buffer_path[128]` — name of the shared memory ring buffer
+- `status` — enum: RUNNING, STOPPED, CRASHED
+- `last_heartbeat` — timestamp of last heartbeat (to detect frozen services)
+
+### The Message Format (ServiceMessage struct)
+
+When a client or service communicates with Service Manager, it sends this struct:
+
 ```
-Input: "hardware camera start camera0"
-  ↓
-Parse: category="hardware", subcmd="camera", action="start", arg="camera0"
-  ↓
-Route: switch(category) { case "hardware": HardwareManager::handle() }
-  ↓
-Execute: HardwareManager::startCamera("camera0")
-  ↓
-Response: "Camera camera0 started successfully"
+ServiceMessage {
+    int     type;          // what kind of message: REGISTER, LOOKUP, HEARTBEAT
+    char    service_name[64];
+    char    socket_path[128];
+    int     pid;
+    int     response_code;  // 0 = success, negative = error
+    char    error_msg[256];
+}
+```
+
+Using a fixed struct (not variable-length messages) is both faster and simpler.
+
+### How Service Manager Starts (main loop)
+
+```
+1. Daemonize (fork, setsid, fork again)
+2. Create Unix socket at /tmp/servicemanager.sock
+3. bind() the socket
+4. listen()
+5. Set up epoll to watch the socket
+6. Set up SIGCHLD handler (to detect crashed services)
+7. Set up SIGTERM handler (for graceful shutdown)
+
+MAIN LOOP:
+8. epoll_wait() — sleep until activity
+9. If new connection: accept() → read ServiceMessage
+10. If type == REGISTER: add to registry, start service process
+11. If type == LOOKUP: find in registry, send back socket_path
+12. If type == HEARTBEAT: update last_heartbeat timestamp
+13. Periodically check all services: if last_heartbeat too old → restart
+14. Go back to step 8
+```
+
+### SIGCHLD Handler
+
+When a service crashes:
+1. Kernel sends SIGCHLD to Service Manager (its parent)
+2. Handler calls `waitpid(-1, &status, WNOHANG)` to collect the zombie
+3. Find which service had that PID
+4. Mark it as CRASHED
+5. After a delay, restart it
+
+### Starting a Service Process
+
+Service Manager starts services using:
+1. `fork()` — create child process
+2. In child: apply namespace restrictions with `clone()` flags or `unshare()`
+3. Apply seccomp filter (see Phase 3)
+4. Drop capabilities
+5. `execve(service_binary_path, args, env)` — replace child with service binary
+
+---
+
+## 12. Phase 3 — Security Layer (seccomp + namespaces)
+
+### What Files to Create
+
+```
+security/
+├── seccomp_filter.h    — declarations
+├── seccomp_filter.c    — seccomp BPF filter setup
+├── sandbox.c           — namespace isolation
+├── capabilities.c      — capability dropping
+└── verify.c            — binary signature verification
+```
+
+### Understanding seccomp_filter.c
+
+**Method 1: Using libseccomp (easier, recommended)**
+
+Install: `sudo apt install libseccomp-dev`
+
+The flow:
+1. `seccomp_init(SCMP_ACT_KILL)` — create filter, default action = kill process
+2. For each allowed syscall: `seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(read), 0)`
+3. `seccomp_load(ctx)` — apply the filter to current process
+
+After `seccomp_load()`, any syscall not in the whitelist will immediately kill the process.
+
+**Different whitelist for each service type:**
+
+Audio Service allowed syscalls:
+`read, write, open, close, ioctl, mmap, munmap, brk, exit_group, futex, nanosleep`
+
+Sensor Service allowed syscalls:
+`read, write, open, close, ioctl, mmap, munmap, brk, exit_group, futex`
+
+Network Service allowed syscalls:
+`read, write, socket, connect, send, recv, close, mmap, munmap, brk, exit_group, futex`
+
+**CRITICAL:** Always add `exit_group` and `futex` to every whitelist or your process cannot even exit cleanly.
+
+### Understanding sandbox.c
+
+**Using unshare() to create namespaces:**
+
+```
+Before creating sandbox:
+1. unshare(CLONE_NEWPID)     → new PID namespace
+2. unshare(CLONE_NEWNET)     → new network namespace
+3. unshare(CLONE_NEWNS)      → new mount namespace
+4. unshare(CLONE_NEWUSER)    → new user namespace (needs uid/gid mapping)
+
+For user namespace:
+Write to /proc/PID/uid_map: "0 1000 1" (map internal uid 0 to external uid 1000)
+Write to /proc/PID/gid_map: "0 1000 1"
+```
+
+**Setting up a minimal filesystem with bind mounts:**
+
+After `CLONE_NEWNS`, set up only what the service needs:
+```
+mount("tmpfs", "/tmp/service_root", "tmpfs", 0, NULL)
+mkdir("/tmp/service_root/dev")
+mount("/dev/snd", "/tmp/service_root/dev/snd", NULL, MS_BIND, NULL)  → only audio device
+chroot("/tmp/service_root")  → service now has no access to real filesystem
+```
+
+### Understanding capabilities.c
+
+After starting but before doing any work, a service calls `drop_capabilities()`:
+
+```
+1. prctl(PR_SET_KEEPCAPS, 1)  → allow keeping caps through uid change
+2. setuid(service_uid)         → drop to normal user
+3. cap_set_flag()              → set only needed capability
+4. capset()                    → apply the capability set
+5. prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)  → CRITICAL: can never gain new privileges
+```
+
+`PR_SET_NO_NEW_PRIVS` is very important. It means even if a service calls `execve()` to run a setuid binary, it does not gain new privileges. This single line closes many attack vectors.
+
+### Understanding verify.c
+
+**Simple HMAC-SHA256 verification:**
+
+At build time (developer runs a script):
+1. Read the service binary
+2. Compute HMAC-SHA256 with a secret key
+3. Save the hash to `service_name.sig` file
+
+At runtime (Service Manager does this before launching):
+1. Read the service binary
+2. Compute HMAC-SHA256 with same key
+3. Read the `.sig` file
+4. Compare — if not equal, refuse to run
+
+Use `openssl/hmac.h` — link with `-lssl -lcrypto`
+
+---
+
+## 13. Phase 4 — HAL Layer
+
+### What the HAL Is
+
+HAL means Hardware Abstraction Layer. It is the C layer that talks to actual hardware. Services above it do not know if they are talking to a real device or a test dummy — they just call functions.
+
+### What Files to Create
+
+```
+hal/
+├── hal_interface.h    — the base struct all HAL devices share
+├── audio_hal.c        — audio hardware implementation  
+├── sensor_hal.c       — sensor hardware implementation
+└── camera_hal.c       — camera hardware implementation
+```
+
+### hal_interface.h — The Base Type
+
+Every hardware device has at least:
+```
+hw_device_t {
+    char    name[64];     — "audio", "sensor", "camera"
+    int     version;      — version number for compatibility
+    int     fd;           — file descriptor to the device
+    int     (*open)(hw_device_t*)    — function pointer to open device
+    int     (*close)(hw_device_t*)   — function pointer to close device
+    char    reserved[64];            — space for future use
+}
+```
+
+### audio_hal.c — What It Does
+
+Audio HAL works with `/dev/snd/` (ALSA devices in Linux):
+
+```
+audio_open():
+    fd = open("/dev/snd/pcmC0D0p", O_WRONLY)   — open playback device
+    ioctl(fd, SNDRV_PCM_IOCTL_HW_PARAMS, &params)  — set sample rate etc.
+    return 0 on success
+
+audio_play(data, size):
+    write(fd, data, size)   — write PCM audio data
+
+audio_set_volume(level):
+    ioctl(mixer_fd, SOUND_MIXER_WRITE_VOLUME, &level)
+
+audio_close():
+    close(fd)
+```
+
+### sensor_hal.c — What It Does
+
+Linux exposes sensors through the IIO (Industrial I/O) subsystem at `/sys/bus/iio/devices/`:
+
+```
+sensor_open():
+    fd = open("/sys/bus/iio/devices/iio:device0/in_accel_x_raw", O_RDONLY)
+
+sensor_read(float* x, float* y, float* z):
+    read(fd_x, buf, sizeof(buf)) → parse number → *x = value * scale
+    read(fd_y, buf, sizeof(buf)) → parse number → *y = value * scale
+    read(fd_z, buf, sizeof(buf)) → parse number → *z = value * scale
+```
+
+### Important HAL Design Rules
+
+1. HAL functions should never block for more than a few milliseconds
+2. HAL should not allocate memory — caller provides buffers
+3. Return 0 on success, negative errno on failure
+4. Always close device on error (do not leak file descriptors)
+
+---
+
+## 14. Phase 5 — io_uring Event Loop
+
+### What Files to Create
+
+```
+core/
+├── io_uring_loop.h    — declarations
+└── io_uring_loop.c    — the event loop using io_uring
+```
+
+### What the Event Loop Does
+
+Every service runs an event loop — an infinite loop that:
+1. Waits for something to happen (new request, timer, signal)
+2. Handles it
+3. Repeats
+
+### io_uring Setup
+
+You need kernel 5.1+. Check: `uname -r`
+Install headers: `sudo apt install liburing-dev`
+
+**The setup steps:**
+1. `io_uring_queue_init(32, &ring, 0)` — create ring with 32 submission slots
+2. Register file descriptors you care about: your eventfd from ring buffer, timer fds, socket fds
+
+**The loop:**
+```
+LOOP:
+1. io_uring_get_sqe(&ring) → get a Submission Queue Entry
+2. io_uring_prep_read(sqe, eventfd, buf, 8, 0) → prepare a read operation
+3. io_uring_submit(&ring) → submit it
+4. io_uring_wait_cqe(&ring, &cqe) → sleep until completion
+5. Check cqe->res (result code)
+6. Process the event (call the appropriate handler)
+7. io_uring_cqe_seen(&ring, cqe) → mark as processed
+8. Go back to step 1
+```
+
+### Combining io_uring with epoll
+
+For very complex cases you can use epoll for socket monitoring and io_uring for file/device I/O. Add the epoll fd to the io_uring watch list and handle both in one loop.
+
+---
+
+## 15. Phase 6 — Services and Client Proxy
+
+### Service Template — How to Build Each Service
+
+Every service follows the same pattern:
+
+```
+SERVICE STARTUP SEQUENCE:
+1. Service Manager starts the binary
+2. Apply seccomp filter (Phase 3)
+3. Set up namespaces (Phase 3)
+4. Drop capabilities (Phase 3)
+5. Attach to ring buffer (Phase 1)
+6. Open HAL device (Phase 4)
+7. Register with Service Manager via Unix socket
+8. Start io_uring event loop (Phase 5)
+9. Process requests from ring buffer forever
+```
+
+### What Files to Create
+
+```
+services/
+├── service_template.h    — the common service structure
+├── audio_service.c       — audio service implementation
+└── sensor_service.c      — sensor service implementation
+```
+
+### service_template.h
+
+All services share:
+```
+service_t {
+    char            name[64];
+    ring_buffer_t*  rb;           — pointer to shared ring buffer
+    hw_device_t*    hal;          — pointer to HAL device
+    int             manager_fd;   — socket to service manager
+    int             running;      — 1 = running, 0 = should stop
+    struct io_uring ring;         — io_uring instance
+    void (*handle_request)(service_t*, void* request);  — function to handle requests
+}
+```
+
+### The Client Proxy (C++ Classes)
+
+Proxy classes are what applications use. They hide all the IPC complexity.
+
+```
+apps see this:
+    AudioProxy audio;
+    audio.play("song.mp3");
+    audio.setVolume(80);
+
+internally the proxy does:
+    ring_buffer_write(rb, &request)
+    wait for response on eventfd
+    ring_buffer_read(rb, &response)
+    return response.result
+```
+
+Each proxy:
+- Attaches to the service's ring buffer on construction
+- Sends requests as fixed-size structs
+- Waits for responses using eventfd + epoll
+- Disconnects on destruction
+
+---
+
+## 16. Putting It All Together
+
+### Startup Order
+
+The ORDER matters. Start them in this sequence:
+
+```
+Step 1:
+$ ./service_manager &
+→ Creates /tmp/servicemanager.sock
+→ Enters epoll wait loop
+
+Step 2:
+$ ./audio_service &
+→ Applies seccomp, namespaces
+→ Opens audio HAL
+→ Creates ring buffer /ring_audio in shared memory
+→ Connects to service manager
+→ Sends REGISTER message: name="audio", ring_path="/ring_audio"
+→ Service manager records this
+→ Enters io_uring loop
+
+Step 3:
+$ ./sensor_service &
+→ Same as audio_service but for sensors
+
+Step 4:
+$ ./test_app
+→ Creates AudioProxy
+→ AudioProxy sends LOOKUP to service manager: "audio"
+→ Service manager replies: "/ring_audio"
+→ AudioProxy attaches to /ring_audio ring buffer
+→ App calls audio.play()
+→ Request goes through ring buffer
+→ Audio service handles it
+→ Result comes back through ring buffer
+→ App gets result
+```
+
+### Shutdown Order
+
+Reverse of startup:
+1. Kill applications first (`SIGTERM`)
+2. Kill services (`SIGTERM` — they close HAL, unmap ring buffer)
+3. Kill service manager last (`SIGTERM` — it cleans up all shared memory)
+
+Service manager cleanup:
+- `shm_unlink("/ring_audio")` — delete shared memory objects
+- `unlink("/tmp/servicemanager.sock")` — delete socket file
+- `unlink("/tmp/audio.sock")` etc.
+
+---
+
+## 17. Build System — Makefile Explained
+
+### What the Makefile Does
+
+A Makefile tells the compiler what to compile and in what order. It avoids recompiling things that have not changed.
+
+### Our Makefile Structure
+
+```makefile
+# Compiler settings
+CC  = gcc         ← for .c files
+CXX = g++         ← for .cpp files
+
+# Compiler flags explained:
+# -Wall           → show all warnings
+# -Wextra         → show extra warnings
+# -O2             → optimize for speed
+# -g              → include debug symbols
+# -std=c11        → use C11 standard (we need this for atomics)
+# -std=c++17      → use C++17 for proxy code
+CFLAGS   = -Wall -Wextra -O2 -g -std=c11
+CXXFLAGS = -Wall -Wextra -O2 -g -std=c++17
+
+# Libraries to link:
+# -lrt            → for shm_open()
+# -lpthread       → for pthread and atomics
+# -lseccomp       → for seccomp filters
+# -lssl -lcrypto  → for HMAC signature verification
+# -luring         → for io_uring
+LIBS = -lrt -lpthread -lseccomp -lssl -lcrypto -luring
+
+# Build targets
+all: service_manager audio_service sensor_service test_app
+
+service_manager: core/service_manager.o core/ring_buffer.o security/verify.o
+    $(CC) -o $@ $^ $(LIBS)
+
+audio_service: services/audio_service.o hal/audio_hal.o core/ring_buffer.o \
+               security/seccomp_filter.o security/sandbox.o security/capabilities.o
+    $(CC) -o $@ $^ $(LIBS)
+
+test_app: apps/test_audio.o proxy/audio_proxy.o core/ring_buffer.o
+    $(CXX) -o $@ $^ $(LIBS)
+
+clean:
+    rm -f *.o core/*.o services/*.o hal/*.o security/*.o proxy/*.o apps/*.o
+    rm -f service_manager audio_service sensor_service test_app
+
+# Install (optional)
+install:
+    cp service_manager /usr/local/bin/
+    cp audio_service /usr/local/bin/
+```
+
+### How to Build
+
+```bash
+# Build everything
+make
+
+# Build only one target
+make audio_service
+
+# Clean build artifacts
+make clean
+
+# Build with verbose output to see commands
+make V=1
 ```
 
 ---
 
-## Phase 3 CLI Commands & Usage
+## 18. Testing Your Middleware
 
-### Building Phase 3
-```bash
-# Build Phase 3 with all 7 managers
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase3
-make clean && make -j$(nproc)
+### Unit Tests — Test Each Piece Alone
 
-# Output:
-# ✓ Compiled: hardware_manager.o (286 lines)
-# ✓ Compiled: network_manager.o (241 lines)
-# ✓ Compiled: storage_manager.o (218 lines)
-# ✓ Compiled: power_manager.o (159 lines)
-# ✓ Compiled: security_manager.o (219 lines)
-# ✓ Compiled: media_manager.o (182 lines)
-# ✓ Compiled: system_services.o (239 lines)
-# ✓ Daemon linked: 3.0 MB (ARM64 ELF statically linked)
-# ✓ Client linked: 2.8 MB (ARM64 ELF statically linked)
-# ✓ All systems initialized successfully
+**Test 1: Ring Buffer**
+```
+1. Create ring buffer with capacity 10
+2. Write 5 items
+3. Read 5 items
+4. Verify they match exactly
+5. Write 10 items (fill it up)
+6. Try writing 11th — should fail with buffer full
+7. Read all 10
+8. Try reading again — should fail with buffer empty
 ```
 
-### Starting Phase 3 System
-```bash
-# Terminal 1: Start daemon with all managers
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2
-./build/daemon &
-# Output: 
-# "Daemon started listening on /var/run/middleware.sock"
-# "HardwareManager initialized"
-# "NetworkManager initialized"
-# "StorageManager initialized"
-# "PowerManager initialized"
-# "SecurityManager initialized"
-# "MediaManager initialized"
-# "SystemServices initialized"
-
-# Terminal 2: Connect client (uses Phase 2 menu system)
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2
-./build/client
+**Test 2: seccomp Filter**
+```
+1. Apply audio_service whitelist
+2. Try a disallowed syscall like socket()
+3. Process should be killed (SIGSYS)
+4. Check with strace that only allowed syscalls are used
 ```
 
-### Phase 3 Hardware Manager Commands
-```bash
-# After connecting client, use menu system or direct commands:
-
-# Hardware device control
-> hardware device list
-# Devices:
-# - camera0 (rear), state: enabled, power: 250mW
-# - camera1 (front), state: disabled, power: 0mW
-# - mic0 (enabled), speaker0 (enabled)
-# - display0 (brightness: 80%)
-# - bt0 (disabled), wifi0 (enabled)
-
-> hardware camera start camera0
-# Camera camera0 started successfully
-
-> hardware camera properties camera0
-# Properties:
-# - Type: Rear camera
-# - Resolution: 12MP
-# - Zoom: 4x digital
-# - Flash: LED
-# - Power: 250mW
-
-> hardware bluetooth scan
-# Found 5 Bluetooth devices:
-# 1. Device A (MAC: AA:BB:CC:DD:EE:FF)
-# 2. Device B (MAC: 11:22:33:44:55:66)
-
-> hardware display brightness 100
-# Display brightness set to 100%
-
-> hardware sensor accel calibrate
-# Accelerometer calibrated successfully
-
-> hardware touch calibrate
-# Touch screen calibration started...
+**Test 3: Service Manager Registration**
+```
+1. Start service_manager
+2. Connect via socket
+3. Send REGISTER message
+4. Send LOOKUP message for same service
+5. Verify response has correct socket_path
 ```
 
-### Phase 3 Network Manager Commands
-```bash
-# Network configuration and monitoring
+### Integration Tests — Test the Full Flow
 
-> network wifi scan
-# Available WiFi Networks:
-# 1. MyNetwork (Signal: -45dBm, Security: WPA2)
-# 2. Guest (Signal: -70dBm, Security: WPA2)
-
-> network wifi connect "MyNetwork" "password123"
-# Connecting to MyNetwork...
-# Connected successfully (IP: 192.168.1.100)
-
-> network interfaces
-# Network Interfaces:
-# - wlan0: UP (192.168.1.100/24, Speed: 72 Mbps)
-# - rmnet0: DOWN (not connected)
-# - bt0: UP (Bluetooth network)
-
-> network cellular enable
-# Cellular network enabled
-# Signal strength: 4G LTE
-# Signal bars: 4/5
-
-> network vpn configure "vpn.example.com" "user" "pass"
-# VPN configured successfully
-
-> network vpn enable
-# VPN connected (IP: 10.0.0.5)
-
-> network dns set "8.8.8.8" "8.8.4.4"
-# DNS servers updated
-
-> network ping google.com
-# PING google.com (142.251.41.14) 56 data bytes
-# 64 bytes from google.com: icmp_seq=1 ttl=54 time=24.3ms
-
-> network bandwidth
-# Bandwidth Usage:
-# - wlan0: DL: 2.5Mbps, UL: 0.8Mbps
-# - rmnet0: DL: 0Mbps, UL: 0Mbps
+```
+1. Start entire middleware stack
+2. Connect test app
+3. Request audio play → verify HAL was called
+4. Kill audio_service
+5. Verify service_manager detects crash within 5 seconds
+6. Verify service_manager restarts audio_service
+7. Send another audio request → should work again
 ```
 
-### Phase 3 Storage Manager Commands
+### Tools for Debugging
+
+**strace** — see every syscall a process makes:
 ```bash
-# Storage and file management
-
-> storage list
-# Storage Devices:
-# 1. Internal: 64GB (mounted at /data)
-# 2. External: 32GB (mounted at /mnt/sdcard)
-
-> storage mount /dev/sdb1 /mnt/sdcard
-# Device mounted successfully
-
-> storage df
-# Filesystem     Size  Used Available Use%
-# /data          64GB  28GB    36GB    44%
-# /mnt/sdcard    32GB  12GB    20GB    38%
-
-> storage du /data
-# Directory usage:
-# - /data/apps: 15GB
-# - /data/media: 8GB
-# - /data/system: 3GB
-# - Total: 28GB
-
-> storage backup create /data/important
-# Backup created: backup_20260125_142534
-# Size: 2.3GB
-# Location: /data/backups/backup_20260125_142534.tar.gz
-
-> storage backup list
-# Available Backups:
-# 1. backup_20260125_142534 (2.3GB, Jan 25 14:25)
-# 2. backup_20260124_093021 (2.1GB, Jan 24 09:30)
-
-> storage backup restore backup_20260125_142534
-# Restoring backup... (ETA: 45 seconds)
-# Backup restored successfully
-
-> storage cache clear
-# Cache cleared: 1.2GB freed
-
-> storage files search "*.jpg"
-# Found 342 JPEG files
-# Indexing complete (took 2.3 seconds)
+strace -p PID              → attach to running process
+strace ./audio_service     → trace from start
+strace -e trace=read,write → only show read and write syscalls
 ```
 
-### Phase 3 Power Manager Commands
+**valgrind** — find memory leaks and corruption:
 ```bash
-# Battery and power management
-
-> power status
-# Battery Status:
-# - Level: 78%
-# - Health: Good
-# - Temperature: 32°C
-# - Charging: Yes (AC)
-# - Current Mode: NORMAL
-
-> power modes
-# Available Power Modes:
-# 1. NORMAL (current)    - Full performance
-# 2. POWER_SAVING        - 50% performance, extended battery
-# 3. ULTRA_POWER_SAVING  - 25% performance, maximum battery
-# 4. PERFORMANCE         - 100% performance, ignores battery
-
-> power mode POWER_SAVING
-# Power mode changed to: POWER_SAVING
-# CPU limited to 50%, display brightness reduced
-
-> power battery
-# Battery Information:
-# - Level: 78%
-# - Health: Good (cycle count: 245)
-# - Capacity: 4000mAh
-# - Charge current: 500mA
-# - Voltage: 4.15V
-
-> power temperature
-# Thermal Status:
-# - Current: 32°C
-# - Max safe: 45°C
-# - Throttle trigger: 50°C
-# - Thermal throttling: OFF
-
-> power cpu
-# CPU Frequency:
-# - Core 0: 2.0 GHz (2000 MHz)
-# - Core 1: 1.8 GHz (1800 MHz)
-# - Core 2: 1.5 GHz (1500 MHz)
-# - Core 3: 1.2 GHz (1200 MHz)
-
-> power shutdown 120
-# System will shutdown in 120 seconds. Press Ctrl+C to cancel.
+valgrind --leak-check=full ./test_app
 ```
 
-### Phase 3 Security Manager Commands
+**/proc/PID/maps** — see a process's memory mappings:
 ```bash
-# Security and permissions
-
-> security permissions list
-# App Permissions:
-# - com.example.camera: CAMERA (granted), MICROPHONE (granted)
-# - com.example.maps: LOCATION (granted), NETWORK (granted)
-# - com.example.messenger: SMS (granted), CONTACTS (granted)
-
-> security permissions grant com.example.app CAMERA
-# Permission CAMERA granted to com.example.app
-
-> security permissions revoke com.example.app CAMERA
-# Permission CAMERA revoked from com.example.app
-
-> security biometric fingerprint
-# Fingerprint Authentication:
-# - Enrolled fingerprints: 2
-# - Finger 1: Index (confidence: 99%)
-# - Finger 2: Thumb (confidence: 98%)
-
-> security biometric faceid
-# Face Recognition:
-# - Status: Enrolled
-# - Confidence threshold: 95%
-# - Enrollment date: 2025-12-15
-
-> security pin set 1234
-# PIN set successfully (4 digits)
-
-> security pin verify 1234
-# PIN verified successfully
-
-> security encryption enable
-# Full disk encryption enabled
-# Reboot required to apply
-
-> security encryption status
-# Encryption Status:
-# - Full Disk: Enabled (AES-256)
-# - Per-file: Enabled for /data/sensitive
-# - Secure storage: Active
-
-> security apps verify com.example.app
-# App Verification:
-# - Signature: Valid
-# - Publisher: Example Inc.
-# - Sandbox: Enabled
-# - Status: Safe
+cat /proc/$(pgrep audio_service)/maps
 ```
 
-### Phase 3 Media Manager Commands
+**ipcs** — list shared memory segments:
 ```bash
-# Audio, video, and haptics
-
-> media audio play /data/music/song.mp3
-# Playing: song.mp3
-# Duration: 3:45
-# Current: 0:00
-
-> media audio pause
-# Paused at 1:23
-
-> media audio stop
-# Stopped
-
-> media audio volume 70
-# Volume set to 70%
-
-> media audio route BLUETOOTH
-# Audio routing changed to: BLUETOOTH
-# (Available: SPEAKER, HEADPHONE, BLUETOOTH, EARPIECE)
-
-> media video play /data/videos/movie.mp4
-# Playing: movie.mp4
-# Resolution: 1920x1080 (1080p)
-# Duration: 2:15:30
-
-> media video quality HD
-# Video quality set to HD (720p)
-
-> media notification play
-# Notification sound played
-
-> media ringtone set /data/ringtones/default.mp3
-# Ringtone set successfully
-
-> media vibration pattern 100,50,100
-# Vibration pattern executed
-
-> media haptic feedback enable
-# Haptic feedback enabled for all interactions
-```
-
-### Phase 3 System Services Commands
-```bash
-# System logging, updates, and health
-
-> system log level DEBUG
-# Log level set to DEBUG
-
-> system log event "Test event message"
-# Event logged: Test event message
-
-> system log tail 10
-# Latest 10 log entries:
-# [INFO] Hardware initialized
-# [DEBUG] Network scan started
-# [WARNING] Battery low at 15%
-# ...
-
-> system update check
-# Checking for updates...
-# System version: 1.2.0
-# Latest version: 1.3.0
-# Update available: 125MB
-
-> system update install 1.3.0
-# Installing update 1.3.0...
-# Progress: [████████████░░░░░░] 65%
-# Installation complete. Reboot required.
-
-> system app updates
-# App Updates Available:
-# 1. com.example.app v2.0 (18MB)
-# 2. com.example.browser v1.5 (45MB)
-
-> system sync enable
-# Cloud Sync enabled
-# Syncing: Contacts, Calendar, Photos
-
-> system sync status
-# Cloud Sync Status:
-# - Contacts: Last sync 2 minutes ago (250 contacts)
-# - Calendar: Last sync 5 minutes ago (45 events)
-# - Photos: Last sync 1 hour ago (1,342 photos)
-
-> system health
-# System Health Report:
-# - Storage: Good (44% used)
-# - RAM: Good (2.1GB/4GB used)
-# - Battery: Excellent (78%)
-# - Temperature: Normal (32°C)
-# - Security: Good (all checks passed)
-
-> system diagnostics
-# Diagnostic Report:
-# - Boot time: 8.5 seconds
-# - Average RAM usage: 1.8GB
-# - Average CPU: 25%
-# - Network quality: Good
-# - No critical issues found
-
-> system maintenance optimize
-# Optimizing storage...
-# - Defragmenting: 45%
-# - Removing junk: 200MB
-# - Optimization complete. 1.2GB freed.
-```
-
-### Phase 3 Verification Commands
-```bash
-# Full system verification
-
-# 1. Build verification
-cd /home/muhammad-imtinan-ul-haq/Desktop/middleware/phase2
-make clean && make -j$(nproc)
-# Should show all 7 managers compiled successfully
-
-# 2. Check daemon status
-ps aux | grep daemon
-# Should show daemon running
-
-# 3. Test all managers
-./build/client << 'EOF'
-hardware device list
-network interfaces
-storage df
-power status
-security permissions list
-media audio volume 50
-system health
-exit
-EOF
-
-# 4. View system logs
-tail -100 /var/log/middleware.log
-
-# 5. Check memory usage
-ps aux | grep -E "(daemon|client)" | grep -v grep
-
-# 6. Test rapid commands (stress test)
-for i in {1..100}; do
-  ./build/client "power status" > /dev/null
-done
-
-# 7. Final status
-./build/client "system health"
+ipcs -m
 ```
 
 ---
 
-## Summary of All Phases
+## 19. Common Errors and How to Fix Them
 
-| Aspect | Phase 1 | Phase 2 | Phase 3 |
-|--------|---------|---------|---------|
-| **Core Focus** | Foundation | Android Principles | Professional System Mgmt |
-| **Main Files** | 9 | 13 | 14 manager files |
-| **Lines of Code** | 700+ | 1,500+ | 2,000+ |
-| **Key Classes** | Daemon, Client, Logger | ProcessMgr, ServiceReg, AppReg | 7 System Managers |
-| **Commands** | 7+ basic | 43+ advanced | 140+ methods (7 categories) |
-| **Binary Size** | 2.8MB | 3.0MB | 3.0MB |
-| **Architecture** | Socket IPC | Managers + IPC | 7-Manager System |
-| **Status** | ✅ Complete | ✅ Complete | ✅ Complete |
-| **Production Ready** | Yes | Yes | **Yes** |
+### Error: "Operation not permitted" when setting seccomp
+
+**Cause:** Your kernel might need `CONFIG_SECCOMP_FILTER=y` enabled.
+
+**Fix:** Check with `grep SECCOMP /boot/config-$(uname -r)`. If not set, use a different kernel or VM.
+
+### Error: "No such file or directory" for /dev/snd/
+
+**Cause:** No audio hardware or ALSA not loaded.
+
+**Fix:** `sudo modprobe snd-dummy` — loads a dummy sound card for testing.
+
+### Error: Segfault in ring buffer
+
+**Cause:** Almost always the two processes have different sizes for the ring buffer struct.
+
+**Fix:** Make sure both processes use the exact same header file. Do not have two copies.
+
+### Error: "Address already in use" for Unix socket
+
+**Cause:** Previous run crashed and left the socket file behind.
+
+**Fix:** Add to startup code: `unlink("/tmp/servicemanager.sock")` before `bind()`. Or run `rm /tmp/*.sock` manually.
+
+### Error: Shared memory persists after crash
+
+**Cause:** `shm_unlink()` was never called.
+
+**Fix:** List with `ls /dev/shm/`. Delete with `rm /dev/shm/ring_audio` etc. Add signal handlers to always clean up.
+
+### Error: Service Manager does not detect crash
+
+**Cause:** SIGCHLD handler not set up correctly or `waitpid()` not being called.
+
+**Fix:** Make sure `sigaction(SIGCHLD, &sa, NULL)` is called with `SA_NOCLDSTOP` flag so you get SIGCHLD only on process termination, not stop/continue.
+
+### Error: io_uring fails to initialize
+
+**Cause:** Kernel too old (need 5.1+) or user has insufficient locked memory.
+
+**Fix:** `ulimit -l unlimited` or add `* - memlock unlimited` to `/etc/security/limits.conf`.
 
 ---
 
-**Project Status**: All 3 phases complete and production-ready. Total implementation: 4,200+ lines of professional C++ code across 36 files with 140+ public methods and comprehensive system management capabilities.
+## 20. Full Project Folder Structure
 
-**Created**: January 2026  
-**Last Updated**: January 25, 2026  
-**Target Completion**: Phase 3 Complete ✅
+```
+secure_middleware/
+│
+├── Makefile                       ← Build everything
+│
+├── core/                          ← Core infrastructure
+│   ├── ring_buffer.h              ← Zero-copy IPC header
+│   ├── ring_buffer.c              ← Zero-copy IPC implementation
+│   ├── service_manager.h          ← Service registry header
+│   ├── service_manager.c          ← Central daemon
+│   ├── memory_pool.h              ← Pre-allocated pool header
+│   ├── memory_pool.c              ← Pre-allocated pool impl
+│   ├── io_uring_loop.h            ← Event loop header
+│   └── io_uring_loop.c            ← io_uring event loop
+│
+├── security/                      ← All security components
+│   ├── seccomp_filter.h           ← Syscall filter header
+│   ├── seccomp_filter.c           ← Per-service whitelists
+│   ├── sandbox.h                  ← Sandbox header
+│   ├── sandbox.c                  ← Namespace isolation
+│   ├── capabilities.h             ← Caps header
+│   ├── capabilities.c             ← Privilege dropping
+│   ├── verify.h                   ← Signature header
+│   └── verify.c                   ← HMAC-SHA256 verification
+│
+├── hal/                           ← Hardware Abstraction Layer
+│   ├── hal_interface.h            ← Common hw_device_t struct
+│   ├── audio_hal.h                ← Audio HAL header
+│   ├── audio_hal.c                ← ALSA implementation
+│   ├── sensor_hal.h               ← Sensor HAL header
+│   ├── sensor_hal.c               ← IIO sysfs implementation
+│   ├── camera_hal.h               ← Camera HAL header
+│   └── camera_hal.c               ← V4L2 implementation
+│
+├── services/                      ← Service daemons
+│   ├── service_template.h         ← Common service_t struct
+│   ├── audio_service.c            ← Audio daemon
+│   └── sensor_service.c           ← Sensor daemon
+│
+├── proxy/                         ← Client-side C++ APIs
+│   ├── service_proxy.h            ← Base proxy class
+│   ├── audio_proxy.h              ← AudioProxy header
+│   ├── audio_proxy.cpp            ← AudioProxy implementation
+│   ├── sensor_proxy.h             ← SensorProxy header
+│   └── sensor_proxy.cpp           ← SensorProxy implementation
+│
+├── apps/                          ← Test applications
+│   ├── test_audio.cpp             ← Test audio service
+│   ├── test_sensor.cpp            ← Test sensor service
+│   └── test_stress.cpp            ← Stress test all services
+│
+└── tools/                         ← Developer tools
+    ├── sign_binary.sh             ← Sign a service binary
+    └── monitor.sh                 ← Watch middleware health
+```
+
+---
+
+## Quick Reference — Important Linux Headers
+
+| Header | What it gives you |
+|--------|------------------|
+| `<unistd.h>` | fork, read, write, close, getpid, execve |
+| `<sys/socket.h>` | socket, bind, listen, accept, connect, send, recv |
+| `<sys/un.h>` | sockaddr_un (Unix domain sockets) |
+| `<sys/mman.h>` | mmap, munmap, mprotect, shm_open |
+| `<sys/wait.h>` | waitpid, WIFEXITED, WIFSIGNALED |
+| `<sys/prctl.h>` | prctl, PR_SET_NO_NEW_PRIVS, PR_SET_KEEPCAPS |
+| `<sys/capability.h>` | cap_set_flag, capset, capget |
+| `<seccomp.h>` | seccomp_init, seccomp_rule_add, seccomp_load |
+| `<stdatomic.h>` | _Atomic, atomic_load, atomic_store, memory_order |
+| `<liburing.h>` | io_uring_queue_init, io_uring_get_sqe, io_uring_submit |
+| `<sched.h>` | clone, unshare, CLONE_NEWPID, CLONE_NEWNET |
+| `<signal.h>` | sigaction, kill, sigemptyset, SIGCHLD, SIGTERM |
+| `<fcntl.h>` | open, O_RDWR, O_CREAT, O_NONBLOCK |
+| `<sys/epoll.h>` | epoll_create1, epoll_ctl, epoll_wait |
+| `<sys/eventfd.h>` | eventfd, EFD_NONBLOCK, EFD_SEMAPHORE |
+| `<openssl/hmac.h>` | HMAC, HMAC_CTX_new, EVP_sha256 |
+
+---
+
+## Your Learning Path — What to Study in Order
+
+If you are starting from zero, study these topics in this exact order:
+
+```
+Week 1:
+  → Processes: fork(), waitpid(), signals
+  → File descriptors: open(), read(), write(), close()
+  → Man pages: man 2 fork, man 2 open, man 2 write
+
+Week 2:
+  → IPC: Unix domain sockets (socket, bind, listen, accept, connect)
+  → Shared memory: shm_open(), mmap()
+  → Practice: Write a simple client-server with Unix sockets
+
+Week 3:
+  → Atomics in C11: _Atomic, atomic_store, atomic_load
+  → Implement a simple ring buffer
+  → Test it with two processes using shared memory
+
+Week 4:
+  → seccomp basics with libseccomp
+  → Linux namespaces: unshare()
+  → prctl() and capabilities
+
+Week 5:
+  → epoll event loop
+  → io_uring basics
+  → daemonizing a process
+
+Week 6:
+  → Combine everything into Phase 1 (ring buffer)
+  → Add Phase 2 (service manager)
+  → Test
+
+Week 7-8:
+  → Security layer (Phase 3)
+  → HAL layer (Phase 4)
+  → First real service
+
+Week 9-10:
+  → io_uring event loop (Phase 5)
+  → Client proxy (Phase 6)
+  → Full integration testing
+```
+
+---
+
+*Documentation Version 1.0 — Secure Linux Middleware*
+*Built with: C11, C++17, Linux Kernel 5.10+*
+*Dependencies: libseccomp, liburing, openssl, libc, libpthread*
