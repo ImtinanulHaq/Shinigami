@@ -1,12 +1,173 @@
 #define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 
 #include "seccomp_filter.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <time.h>
 #include <seccomp.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <errno.h>
+#include <signal.h>
+#include <sys/signalfd.h>
+#include <linux/seccomp.h>
+
+// global monitoring state
+static int monitoring_enabled = 0;
+static int log_fd = -1;
+static char log_buffer[1024];
+
+// device file descriptors for argument filtering
+static int* allowed_fds = NULL;
+static size_t allowed_fd_count = 0;
+
+// forward declarations
+static int allow(scmp_filter_ctx ctx, int syscall_nr);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RUNTIME MONITORING - Log Syscall Violations
+// ══════════════════════════════════════════════════════════════════════════════
+
+int seccomp_enable_monitoring(const char* log_path)
+{
+    if (monitoring_enabled) return 0; // already enabled
+    
+    log_fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (log_fd < 0) {
+        perror("[seccomp] open log file");
+        return -1;
+    }
+    
+    monitoring_enabled = 1;
+    printf("[seccomp] monitoring enabled - violations logged to %s\n", log_path);
+    return 0;
+}
+
+static void log_violation(int syscall_nr, const char* syscall_name)
+{
+    if (!monitoring_enabled || log_fd < 0) return;
+    
+    time_t now = time(NULL);
+    snprintf(log_buffer, sizeof(log_buffer), 
+        "[%ld] SECCOMP_VIOLATION: syscall=%d (%s) pid=%d\n",
+        now, syscall_nr, syscall_name ? syscall_name : "unknown", getpid());
+    
+    write(log_fd, log_buffer, strlen(log_buffer));
+}
+
+// signal handler for SIGSYS (seccomp violations)
+static void handle_sigsys(int sig, siginfo_t* info, void* context)
+{
+    if (info->si_code == 1) { // seccomp violation code
+        log_violation(info->si_syscall, NULL);
+        // still terminate - just log first
+    }
+    
+    // re-raise as SIGKILL for immediate termination
+    kill(getpid(), SIGKILL);
+}
+
+static int setup_violation_logging(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = handle_sigsys;
+    sa.sa_flags = SA_SIGINFO;
+    
+    return sigaction(SIGSYS, &sa, NULL);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ARGUMENT FILTERING - Restrict ioctl() to specific devices
+// ══════════════════════════════════════════════════════════════════════════════
+
+static int setup_device_fd_list(const char** device_paths, size_t count)
+{
+    if (allowed_fds) {
+        free(allowed_fds);
+        allowed_fds = NULL;
+        allowed_fd_count = 0;
+    }
+    
+    if (!device_paths || count == 0) return 0;
+    
+    allowed_fds = malloc(count * sizeof(int));
+    if (!allowed_fds) return -1;
+    
+    allowed_fd_count = 0;
+    for (size_t i = 0; i < count; i++) {
+        int fd = open(device_paths[i], O_RDWR);
+        if (fd >= 0) {
+            allowed_fds[allowed_fd_count++] = fd;
+            printf("[seccomp] registered device fd %d for %s\n", fd, device_paths[i]);
+        } else {
+            printf("[seccomp] warning: cannot open %s\n", device_paths[i]);
+        }
+    }
+    
+    return 0;
+}
+
+static int add_ioctl_arg_filter(scmp_filter_ctx ctx)
+{
+    if (allowed_fd_count == 0) {
+        // no argument filtering - allow ioctl on any fd
+        return allow(ctx, SCMP_SYS(ioctl));
+    }
+    
+    // add rule for each allowed file descriptor
+    for (size_t i = 0; i < allowed_fd_count; i++) {
+        int rc = seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(ioctl), 1,
+                                  SCMP_A0(SCMP_CMP_EQ, allowed_fds[i]));
+        if (rc < 0) {
+            fprintf(stderr, "[seccomp] failed to add ioctl rule for fd %d\n", allowed_fds[i]);
+            return -1;
+        }
+    }
+    
+    printf("[seccomp] ioctl restricted to %zu device file descriptors\n", allowed_fd_count);
+    return 0;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DEFAULT CONFIGURATIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+seccomp_config_t seccomp_get_default_config(service_type_t type)
+{
+    seccomp_config_t config = {0};
+    config.type = type;
+    config.enable_logging = 1;
+    config.enable_arg_filtering = 1;
+    
+    static const char* audio_devices[] = {"/dev/snd/controlC0", "/dev/snd/pcmC0D0p"};
+    static const char* camera_devices[] = {"/dev/video0", "/dev/video1"};
+    static const char* sensor_devices[] = {"/dev/iio:device0", "/sys/bus/iio/devices/iio:device0"};
+    
+    switch (type) {
+        case SERVICE_TYPE_AUDIO:
+            config.allowed_devices = audio_devices;
+            config.device_count = sizeof(audio_devices) / sizeof(audio_devices[0]);
+            break;
+            
+        case SERVICE_TYPE_CAMERA:
+            config.allowed_devices = camera_devices;
+            config.device_count = sizeof(camera_devices) / sizeof(camera_devices[0]);
+            break;
+            
+        case SERVICE_TYPE_SENSOR:
+            config.allowed_devices = sensor_devices;
+            config.device_count = sizeof(sensor_devices) / sizeof(sensor_devices[0]);
+            break;
+    }
+    
+    return config;
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ARCHITECTURE VALIDATION
@@ -146,12 +307,8 @@ static int apply_audio(scmp_filter_ctx ctx)
     
     // ioctl - needed to control /dev/snd ALSA driver
     // examples: set sample rate, buffer size, start/stop playback
-    allow(ctx, SCMP_SYS(ioctl));
-    
-    // TODO: add argument filtering to restrict ioctl to audio device fds only
-    // this would make it even more secure than Android
-    
-    return 0;
+    // now uses argument filtering to restrict to audio devices only
+    return add_ioctl_arg_filter(ctx);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -162,10 +319,9 @@ static int apply_sensor(scmp_filter_ctx ctx)
 {
     apply_common(ctx);
     
-    // ioctl - some sensor drivers need it
-    allow(ctx, SCMP_SYS(ioctl));
-    
-    return 0;
+    // ioctl - some sensor drivers need it  
+    // restricted to sensor device file descriptors only
+    return add_ioctl_arg_filter(ctx);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -177,7 +333,8 @@ static int apply_camera(scmp_filter_ctx ctx)
     apply_common(ctx);
     
     // ioctl - V4L2 driver uses ioctl heavily for frame capture
-    allow(ctx, SCMP_SYS(ioctl));
+    // restricted to camera device file descriptors only
+    if (add_ioctl_arg_filter(ctx) < 0) return -1;
     
     // mlock - lock frame buffers in RAM to prevent swapping
     // critical for real-time video capture
@@ -188,34 +345,44 @@ static int apply_camera(scmp_filter_ctx ctx)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// MAIN: Apply seccomp Filter
-// This is the entry point called by services
+// MAIN: Apply seccomp Filter with Configuration
+// Enhanced version with monitoring and argument filtering
 // ══════════════════════════════════════════════════════════════════════════════
 
-int seccomp_apply(service_type_t type)
+int seccomp_apply_config(const seccomp_config_t* config)
 {
-    // ── STEP 1: Create Filter Context ─────────────────────────────────────────
-    // SCMP_ACT_KILL = any syscall not in whitelist → instant process termination
-    // This is the strictest mode - better than Android's SCMP_ACT_TRAP
+    if (!config) return -1;
     
-    scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_KILL);
+    // ── STEP 1: Setup Monitoring if Enabled ───────────────────────────────────
+    if (config->enable_logging) {
+        if (setup_violation_logging() < 0) {
+            fprintf(stderr, "[seccomp] warning: monitoring setup failed\n");
+        }
+    }
+    
+    // ── STEP 2: Setup Device File Descriptors for Argument Filtering ──────────
+    if (config->enable_arg_filtering) {
+        if (setup_device_fd_list(config->allowed_devices, config->device_count) < 0) {
+            fprintf(stderr, "[seccomp] warning: device fd setup failed\n");
+        }
+    }
+    
+    // ── STEP 3: Create Filter Context ─────────────────────────────────────────
+    scmp_filter_ctx ctx = seccomp_init(monitoring_enabled ? SCMP_ACT_TRAP : SCMP_ACT_KILL);
     if (!ctx) {
         fprintf(stderr, "[seccomp] init failed\n");
         return -1;
     }
     
-    // ── STEP 2: Validate Architecture ─────────────────────────────────────────
-    // Prevent 32-bit syscall bypass on 64-bit systems
-    
+    // ── STEP 4: Validate Architecture ─────────────────────────────────────────
     if (validate_architecture(ctx) < 0) {
         seccomp_release(ctx);
         return -1;
     }
     
-    // ── STEP 3: Apply Service-Specific Whitelist ──────────────────────────────
-    
+    // ── STEP 5: Apply Service-Specific Whitelist ──────────────────────────────
     int rc = 0;
-    switch (type) {
+    switch (config->type) {
         case SERVICE_TYPE_AUDIO:
             rc = apply_audio(ctx);
             printf("[seccomp] audio service whitelist applied\n");
@@ -232,7 +399,7 @@ int seccomp_apply(service_type_t type)
             break;
             
         default:
-            fprintf(stderr, "[seccomp] unknown service type %d\n", type);
+            fprintf(stderr, "[seccomp] unknown service type %d\n", config->type);
             seccomp_release(ctx);
             return -1;
     }
@@ -243,33 +410,41 @@ int seccomp_apply(service_type_t type)
         return -1;
     }
     
-    // ── STEP 4: Lock Privilege Escalation ─────────────────────────────────────
-    // Even if service calls execve() on a setuid binary, no new privileges
-    // This is critical - without it, seccomp can be bypassed
-    
+    // ── STEP 6: Lock Privilege Escalation ─────────────────────────────────────
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) {
         perror("[seccomp] PR_SET_NO_NEW_PRIVS");
         seccomp_release(ctx);
         return -1;
     }
     
-    // ── STEP 5: Load Filter into Kernel ───────────────────────────────────────
-    // From this point forward, filter is ACTIVE and IRREVERSIBLE
-    // Any syscall not in whitelist = instant SIGKILL
-    
+    // ── STEP 7: Load Filter into Kernel ───────────────────────────────────────
     if (seccomp_load(ctx) != 0) {
         fprintf(stderr, "[seccomp] load failed - check kernel CONFIG_SECCOMP\n");
         seccomp_release(ctx);
         return -1;
     }
     
-    // ── STEP 6: Release Context ───────────────────────────────────────────────
-    // Filter stays active in kernel even after releasing context
-    
     seccomp_release(ctx);
     
-    printf("[seccomp] ACTIVE - syscall firewall engaged\n");
-    printf("[seccomp] unauthorized syscalls will result in immediate termination\n");
+    printf("[seccomp] ACTIVE - enhanced syscall firewall engaged\n");
+    if (config->enable_logging) {
+        printf("[seccomp] violation logging enabled\n");
+    }
+    if (config->enable_arg_filtering && allowed_fd_count > 0) {
+        printf("[seccomp] argument filtering active for %zu devices\n", allowed_fd_count);
+    }
     
     return 0;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN: Apply seccomp Filter (Simplified Interface)
+// This is the entry point called by services
+// ══════════════════════════════════════════════════════════════════════════════
+
+int seccomp_apply(service_type_t type)
+{
+    // use default configuration for the service type
+    seccomp_config_t config = seccomp_get_default_config(type);
+    return seccomp_apply_config(&config);
 }

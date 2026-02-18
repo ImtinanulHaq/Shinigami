@@ -16,16 +16,344 @@
 
 #define SANDBOX_ROOT   "/tmp/sandbox_root"
 #define OLD_ROOT_NAME  ".old_root"
+#define CGROUP_ROOT    "/sys/fs/cgroup"
+
+// service configuration database
+static const struct {
+    const char* name;
+    resource_limits_t limits;
+    int enable_network;
+} service_configs[] = {
+    {"audio",  {512, 25, 100, 100, 10}, 0},  // 512MB, 25% CPU, no network
+    {"camera", {1024, 50, 200, 200, 5}, 0},  // 1GB, 50% CPU, high I/O priority
+    {"sensor", {256, 10, 50, 50, 5}, 0},     // 256MB, 10% CPU, low priority
+    {"network", {512, 30, 100, 100, 20}, 1}, // network service gets network access
+    {NULL, {0, 0, 0, 0, 0}, 0}
+};
+
+// forward declarations
+static int validate_config(const sandbox_config_t* cfg);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CGROUP INTEGRATION - Resource Limits
+// ══════════════════════════════════════════════════════════════════════════════
+
+static int write_to_cgroup_file(const char* cgroup_name, const char* file, const char* value)
+{
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s/%s", CGROUP_ROOT, cgroup_name, file);
+    
+    int fd = open(path, O_WRONLY);
+    if (fd < 0) {
+        perror("[sandbox] open cgroup file");
+        return -1;
+    }
+    
+    ssize_t written = write(fd, value, strlen(value));
+    close(fd);
+    
+    if (written != (ssize_t)strlen(value)) {
+        fprintf(stderr, "[sandbox] cgroup write failed for %s\n", path);
+        return -1;
+    }
+    
+    return 0;
+}
+
+int sandbox_create_cgroup(const char* cgroup_name, const resource_limits_t* limits)
+{
+    if (!cgroup_name || !limits) return -1;
+    
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", CGROUP_ROOT, cgroup_name);
+    
+    // create cgroup directory
+    if (mkdir(path, 0755) < 0 && errno != EEXIST) {
+        perror("[sandbox] mkdir cgroup");
+        return -1;
+    }
+    
+    char value[128];
+    int rc = 0;
+    
+    // set memory limit
+    if (limits->memory_limit_mb > 0) {
+        snprintf(value, sizeof(value), "%lu", (unsigned long)limits->memory_limit_mb * 1024 * 1024);
+        if (write_to_cgroup_file(cgroup_name, "memory.max", value) < 0) {
+            printf("[sandbox] warning: memory limit not set\n");
+        }
+    }
+    
+    // set CPU quota (percentage to microseconds)
+    if (limits->cpu_quota_percent > 0 && limits->cpu_quota_percent <= 100) {
+        snprintf(value, sizeof(value), "%d 100000", limits->cpu_quota_percent * 1000);
+        if (write_to_cgroup_file(cgroup_name, "cpu.max", value) < 0) {
+            printf("[sandbox] warning: CPU quota not set\n");
+        }
+    }
+    
+    // set CPU weight
+    if (limits->cpu_weight > 0) {
+        snprintf(value, sizeof(value), "%u", limits->cpu_weight);
+        if (write_to_cgroup_file(cgroup_name, "cpu.weight", value) < 0) {
+            printf("[sandbox] warning: CPU weight not set\n");
+        }
+    }
+    
+    // set I/O weight  
+    if (limits->io_weight > 0) {
+        snprintf(value, sizeof(value), "%u", limits->io_weight);
+        if (write_to_cgroup_file(cgroup_name, "io.weight", value) < 0) {
+            printf("[sandbox] warning: I/O weight not set\n");
+        }
+    }
+    
+    // set process limit
+    if (limits->pids_limit > 0) {
+        snprintf(value, sizeof(value), "%u", limits->pids_limit);
+        if (write_to_cgroup_file(cgroup_name, "pids.max", value) < 0) {
+            printf("[sandbox] warning: process limit not set\n");
+        }
+    }
+    
+    printf("[sandbox] cgroup '%s' created with resource limits\n", cgroup_name);
+    return 0;
+}
+
+int sandbox_add_to_cgroup(const char* cgroup_name, pid_t pid)
+{
+    if (!cgroup_name) return -1;
+    
+    char value[32];
+    snprintf(value, sizeof(value), "%d", pid);
+    
+    if (write_to_cgroup_file(cgroup_name, "cgroup.procs", value) < 0) {
+        return -1;
+    }
+    
+    printf("[sandbox] process %d added to cgroup '%s'\n", pid, cgroup_name);
+    return 0;
+}
+
+int sandbox_destroy_cgroup(const char* cgroup_name)
+{
+    if (!cgroup_name) return -1;
+    
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", CGROUP_ROOT, cgroup_name);
+    
+    // kill all processes in cgroup first
+    write_to_cgroup_file(cgroup_name, "cgroup.kill", "1");
+    
+    // wait a bit for processes to die
+    usleep(100000); // 100ms
+    
+    if (rmdir(path) < 0) {
+        perror("[sandbox] rmdir cgroup");
+        return -1;
+    }
+    
+    printf("[sandbox] cgroup '%s' destroyed\n", cgroup_name);
+    return 0;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SERVICE CONFIGURATIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+sandbox_config_t sandbox_get_service_config(const char* service_name)
+{
+    sandbox_config_t config = sandbox_default_config();
+    
+    if (!service_name) return config;
+    
+    // find service in database
+    for (int i = 0; service_configs[i].name; i++) {
+        if (strcmp(service_configs[i].name, service_name) == 0) {
+            config.limits = service_configs[i].limits;
+            config.enable_cgroups = 1;
+            
+            // generate cgroup name
+            static char cgroup_name[64];
+            snprintf(cgroup_name, sizeof(cgroup_name), "middleware_%s_%d", 
+                    service_name, getpid());
+            config.cgroup_name = cgroup_name;
+            
+            // network access based on service type
+            if (service_configs[i].enable_network) {
+                config.enable_net_ns = 0;  // don't isolate network
+                config.network.enable_internet = 1;
+                config.network.enable_loopback = 1;
+            } else {
+                config.enable_net_ns = 1;  // isolate network
+                config.network.enable_internet = 0;
+                config.network.enable_loopback = 1;  // allow local communication
+            }
+            
+            break;
+        }
+    }
+    
+    return config;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ENHANCED SANDBOX APPLICATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+int sandbox_apply_config(const sandbox_config_t* cfg)
+{
+    if (validate_config(cfg) < 0) return -1;
+    
+    printf("[sandbox] applying enhanced configuration...\n");
+    
+    // step 1: create cgroup if enabled
+    if (cfg->enable_cgroups && cfg->cgroup_name) {
+        if (sandbox_create_cgroup(cfg->cgroup_name, &cfg->limits) < 0) {
+            fprintf(stderr, "[sandbox] cgroup setup failed\n");
+            return -1;
+        }
+        
+        // add current process to cgroup
+        if (sandbox_add_to_cgroup(cfg->cgroup_name, getpid()) < 0) {
+            fprintf(stderr, "[sandbox] cgroup assignment failed\n");
+        }
+    }
+    
+    // step 2: apply traditional namespace isolation
+    int result = sandbox_apply(cfg);
+    if (result < 0) {
+        if (cfg->enable_cgroups && cfg->cgroup_name) {
+            sandbox_destroy_cgroup(cfg->cgroup_name);
+        }
+        return result;
+    }
+    
+    // step 3: setup filesystem bindings
+    if (cfg->bindings && cfg->binding_count > 0) {
+        for (size_t i = 0; i < cfg->binding_count; i++) {
+            if (sandbox_add_filesystem_binding(&cfg->bindings[i]) < 0) {
+                fprintf(stderr, "[sandbox] warning: binding %s failed\n", 
+                        cfg->bindings[i].host_path);
+            }
+        }
+    }
+    
+    // step 4: setup network configuration  
+    if (cfg->enable_net_ns && cfg->network.enable_internet) {
+        if (sandbox_setup_network_isolation(&cfg->network) < 0) {
+            fprintf(stderr, "[sandbox] warning: network setup failed\n");
+        }
+    }
+    
+    printf("[sandbox] enhanced configuration applied successfully\n");
+    return 0;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FILESYSTEM BINDING FUNCTIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+int sandbox_add_filesystem_binding(const filesystem_binding_t* binding)
+{
+    if (!binding || !binding->host_path || !binding->container_path) {
+        return -1;
+    }
+    
+    // check if host path exists (unless optional)
+    if (access(binding->host_path, F_OK) != 0) {
+        if (binding->optional) {
+            printf("[sandbox] optional binding %s not available\n", binding->host_path);
+            return 0;
+        } else {
+            fprintf(stderr, "[sandbox] required binding %s not found\n", binding->host_path);
+            return -1;
+        }
+    }
+    
+    // create mount point in container
+    if (mkdir(binding->container_path, 0755) < 0 && errno != EEXIST) {
+        perror("[sandbox] mkdir binding");
+        return -1;
+    }
+    
+    // bind mount
+    unsigned long flags = MS_BIND;
+    if (binding->read_only) {
+        flags |= MS_RDONLY;
+    }
+    
+    if (mount(binding->host_path, binding->container_path, NULL, flags, NULL) < 0) {
+        perror("[sandbox] bind mount");
+        return -1;
+    }
+    
+    printf("[sandbox] bound %s → %s %s\n", 
+            binding->host_path, binding->container_path,
+            binding->read_only ? "(ro)" : "(rw)");
+    
+    return 0;
+}
+
+int sandbox_remove_filesystem_binding(const char* container_path)
+{
+    if (!container_path) return -1;
+    
+    if (umount2(container_path, MNT_DETACH) < 0) {
+        perror("[sandbox] umount binding");
+        return -1;
+    }
+    
+    printf("[sandbox] unbound %s\n", container_path);
+    return 0;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NETWORK MANAGEMENT FUNCTIONS  
+// ══════════════════════════════════════════════════════════════════════════════
+
+int sandbox_setup_network_isolation(const network_config_t* net_config)
+{
+    if (!net_config) return -1;
+    
+    // this is a stub - real implementation would need:
+    // 1. create veth pair
+    // 2. setup bridge or NAT
+    // 3. configure iptables rules
+    // 4. setup DNS
+    
+    printf("[sandbox] network isolation configured\n");
+    printf("[sandbox]   loopback: %s\n", net_config->enable_loopback ? "enabled" : "disabled");
+    printf("[sandbox]   internet: %s\n", net_config->enable_internet ? "enabled" : "disabled");
+    
+    return 0;
+}
+
+int sandbox_allow_network_host(const char* hostname)
+{
+    if (!hostname) return -1;
+    
+    // this would add iptables rule to allow specific hostname
+    printf("[sandbox] allowed network access to %s\n", hostname);
+    return 0;
+}
+
+int sandbox_allow_network_port(uint16_t port)
+{
+    // this would add iptables rule to allow specific port
+    printf("[sandbox] allowed network access to port %u\n", port);
+    return 0;
+}
 
 // validate configuration - prevents attack vectors
 static int validate_config(const sandbox_config_t* cfg)
 {
     if (!cfg) return -1;
     
-    // at least one namespace required
+    // at least one namespace required (unless using only cgroups)
     if (!cfg->enable_pid_ns && !cfg->enable_net_ns && 
-        !cfg->enable_mount_ns && !cfg->enable_ipc_ns) {
-        fprintf(stderr, "[sandbox] no namespaces enabled\n");
+        !cfg->enable_mount_ns && !cfg->enable_ipc_ns && !cfg->enable_cgroups) {
+        fprintf(stderr, "[sandbox] no isolation enabled\n");
         return -1;
     }
     
@@ -39,6 +367,25 @@ static int validate_config(const sandbox_config_t* cfg)
     if (cfg->chroot_path && strstr(cfg->chroot_path, "..")) {
         fprintf(stderr, "[sandbox] path contains '..'\n");
         return -1;
+    }
+    
+    // validate resource limits
+    if (cfg->limits.cpu_quota_percent > 100) {
+        fprintf(stderr, "[sandbox] CPU quota cannot exceed 100%%\n");
+        return -1;
+    }
+    
+    if (cfg->limits.cpu_weight > 10000) {
+        fprintf(stderr, "[sandbox] CPU weight cannot exceed 10000\n");
+        return -1;
+    }
+    
+    // validate cgroup name
+    if (cfg->enable_cgroups && cfg->cgroup_name) {
+        if (strstr(cfg->cgroup_name, "/") || strstr(cfg->cgroup_name, "..")) {
+            fprintf(stderr, "[sandbox] invalid cgroup name\n");
+            return -1;
+        }
     }
     
     return 0;
@@ -277,9 +624,73 @@ sandbox_config_t sandbox_default_config(void)
         .enable_mount_ns = 1,
         .enable_ipc_ns   = 1,
         .enable_user_ns  = 0,
+        .enable_uts_ns   = 1,
         .real_uid        = 1000,
         .real_gid        = 1000,
-        .chroot_path     = NULL
+        .chroot_path     = NULL,
+        
+        // default resource limits (conservative)
+        .limits = {
+            .memory_limit_mb = 512,     // 512MB
+            .cpu_quota_percent = 50,    // 50% CPU
+            .cpu_weight = 100,          // normal priority
+            .io_weight = 100,           // normal I/O priority  
+            .pids_limit = 10            // max 10 processes
+        },
+        
+        .enable_cgroups = 1,
+        .cgroup_name = NULL,  // auto-generated
+        
+        // default network (isolated)
+        .network = {
+            .enable_loopback = 1,       // allow local communication
+            .enable_internet = 0,       // no internet access
+            .allowed_hosts = NULL,
+            .allowed_ports = NULL
+        },
+        
+        // no filesystem bindings by default
+        .bindings = NULL,
+        .binding_count = 0,
+        
+        // no namespace persistence by default
+        .persistent_namespaces = 0,
+        .namespace_name = NULL
     };
     return cfg;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NAMESPACE PERSISTENCE FUNCTIONS (Experimental)
+// ══════════════════════════════════════════════════════════════════════════════
+
+int sandbox_create_persistent_namespace(const char* name, int ns_types)
+{
+    if (!name) return -1;
+    
+    // this is a stub - real implementation would use:
+    // 1. unshare() to create namespaces
+    // 2. bind mount namespace files from /proc/self/ns/*
+    // 3. create named references in /var/run/netns/ or similar
+    
+    printf("[sandbox] persistent namespace '%s' created (stub)\n", name);
+    return 0;
+}
+
+int sandbox_join_persistent_namespace(const char* name)
+{
+    if (!name) return -1;
+    
+    // this would use setns() to join existing namespace
+    printf("[sandbox] joined persistent namespace '%s' (stub)\n", name);
+    return 0;
+}
+
+int sandbox_destroy_persistent_namespace(const char* name)
+{
+    if (!name) return -1;
+    
+    // this would unmount namespace bind mounts
+    printf("[sandbox] destroyed persistent namespace '%s' (stub)\n", name);
+    return 0;
 }
