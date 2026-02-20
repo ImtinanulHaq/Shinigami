@@ -49,8 +49,11 @@ int  sm_registry_update_heartbeat(const char* name);
 // Remove service from registry
 int  sm_registry_remove(const char* name);
 
-// Get all services
+// Get all services (allocates copy - must call sm_registry_free_copy() after use)
 int  sm_registry_get_all(service_entry_t** out, int* count);
+
+// Free registry copy allocated by sm_registry_get_all()
+void sm_registry_free_copy(service_entry_t* copy);
 
 // Get service count
 int  sm_registry_count(void);

@@ -56,4 +56,7 @@ void sm_health_check(void)
             }
         }
     }
+
+    // Free the copy allocated by sm_registry_get_all()
+    sm_registry_free_copy(services);
 }

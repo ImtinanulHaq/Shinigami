@@ -43,6 +43,32 @@ static int send_reply_lookup(int fd, const service_entry_t* entry)
     return 0;
 }
 
+// ── ASYNC REPLY HELPERS (for non-blocking I/O) ─────────────────────────────────
+
+static int buf_reply(void* buf, int buf_size, int response_code)
+{
+    if (buf_size < (int)sizeof(sm_reply_t)) {
+        return -1;
+    }
+    sm_reply_t* reply = (sm_reply_t*)buf;
+    reply->response_code = response_code;
+    return sizeof(sm_reply_t);
+}
+
+static int buf_reply_lookup(void* buf, int buf_size, const service_entry_t* entry)
+{
+    if (buf_size < (int)sizeof(sm_lookup_reply_t)) {
+        return -1;
+    }
+    sm_lookup_reply_t* reply = (sm_lookup_reply_t*)buf;
+    strncpy(reply->socket_path, entry->socket_path, SM_MAX_PATH - 1);
+    reply->socket_path[SM_MAX_PATH - 1] = '\0';
+    strncpy(reply->ring_name, entry->ring_name, SM_MAX_PATH - 1);
+    reply->ring_name[SM_MAX_PATH - 1] = '\0';
+    reply->service_pid = entry->pid;
+    return sizeof(sm_lookup_reply_t);
+}
+
 // ── REQUEST VALIDATION ─────────────────────────────────────────────────────────
 
 static int validate_request(const sm_hdr_t* hdr, const void* body __attribute__((unused)), size_t body_size)
@@ -243,4 +269,153 @@ int sm_handle_client(int client_fd)
     }
 
     return rc;
+}
+
+// ── ASYNCHRONOUS CLIENT HANDLER ────────────────────────────────────────────────
+// For non-blocking I/O: builds response in buffer instead of sending directly
+
+int sm_handle_client_async(int client_fd, const sm_hdr_t* hdr, const void* payload, 
+                           void* reply_buf, int reply_buf_size, int* out_size)
+{
+    if (!hdr || !reply_buf || !out_size) {
+        return -1;
+    }
+
+    pid_t peer_pid = sm_get_peer_pid(client_fd);
+
+    // Check rate limit
+    if (sm_rate_limit_check(peer_pid) != SM_OK) {
+        sm_log(SM_LOG_WARN, "rate limit exceeded for PID %d", peer_pid);
+        *out_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_RATELIMIT);
+        return *out_size;
+    }
+
+    // Validate entire message
+    if (validate_request(hdr, payload, hdr->length) != SM_OK) {
+        sm_log(SM_LOG_ERROR, "invalid message from PID %d type=%d",
+               peer_pid, hdr->type);
+        *out_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_PROTOCOL);
+        return *out_size;
+    }
+
+    // Dispatch to handler (handlers fill reply buffer)
+    int reply_size = 0;
+    switch (hdr->type) {
+        case SM_MSG_REGISTER: {
+            sm_register_req_t* req = (sm_register_req_t*)payload;
+            sm_log(SM_LOG_DEBUG, "registering service '%s' from PID %d (uid=%d)",
+                   req->service_name, hdr->client_pid, sm_get_peer_uid(client_fd));
+
+            // Validate input
+            if (sm_validate_service_name(req->service_name) != SM_OK) {
+                sm_log(SM_LOG_ERROR, "invalid service name: '%s'", req->service_name);
+                reply_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_INVALID);
+                break;
+            }
+
+            if (sm_validate_socket_path(req->socket_path) != SM_OK) {
+                sm_log(SM_LOG_ERROR, "invalid socket path: '%s'", req->socket_path);
+                reply_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_INVALID);
+                break;
+            }
+
+            if (sm_validate_socket_path(req->ring_name) != SM_OK) {
+                sm_log(SM_LOG_ERROR, "invalid ring_name: '%s'", req->ring_name);
+                reply_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_INVALID);
+                break;
+            }
+
+            // Build service entry
+            service_entry_t entry = {0};
+            strncpy(entry.name, req->service_name, SM_MAX_NAME - 1);
+            entry.name[SM_MAX_NAME - 1] = '\0';
+            strncpy(entry.socket_path, req->socket_path, SM_MAX_PATH - 1);
+            entry.socket_path[SM_MAX_PATH - 1] = '\0';
+            strncpy(entry.ring_name, req->ring_name, SM_MAX_PATH - 1);
+            entry.ring_name[SM_MAX_PATH - 1] = '\0';
+            entry.pid = req->pid;
+            entry.uid = sm_get_peer_uid(client_fd);
+            entry.gid = sm_get_peer_gid(client_fd);
+            entry.status = SERVICE_RUNNING;
+            entry.last_heartbeat = time(NULL);
+
+            int rc = sm_registry_add(&entry);
+            reply_size = buf_reply(reply_buf, reply_buf_size, rc);
+            break;
+        }
+        case SM_MSG_LOOKUP: {
+            sm_lookup_req_t* req = (sm_lookup_req_t*)payload;
+            sm_log(SM_LOG_DEBUG, "lookup '%s' from PID %d",
+                   req->service_name, hdr->client_pid);
+
+            if (sm_validate_service_name(req->service_name) != SM_OK) {
+                reply_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_INVALID);
+                break;
+            }
+
+            service_entry_t* entry = sm_registry_find(req->service_name);
+            if (!entry) {
+                sm_log(SM_LOG_WARN, "service '%s' not found", req->service_name);
+                reply_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_NOT_FOUND);
+                break;
+            }
+
+            if (entry->status != SERVICE_RUNNING) {
+                sm_log(SM_LOG_WARN, "service '%s' not running (status=%d)",
+                       req->service_name, entry->status);
+                reply_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_NOT_FOUND);
+                break;
+            }
+
+            reply_size = buf_reply_lookup(reply_buf, reply_buf_size, entry);
+            break;
+        }
+        case SM_MSG_HEARTBEAT: {
+            sm_heartbeat_req_t* req = (sm_heartbeat_req_t*)payload;
+            sm_log(SM_LOG_DEBUG, "heartbeat '%s' from PID %d",
+                   req->service_name, hdr->client_pid);
+
+            if (sm_validate_service_name(req->service_name) != SM_OK) {
+                reply_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_INVALID);
+                break;
+            }
+
+            int rc = sm_registry_update_heartbeat(req->service_name);
+            if (rc != SM_OK) {
+                sm_log(SM_LOG_WARN, "heartbeat for unknown service '%s'",
+                       req->service_name);
+            }
+            reply_size = buf_reply(reply_buf, reply_buf_size, rc);
+            break;
+        }
+        case SM_MSG_UNREGISTER: {
+            sm_unregister_req_t* req = (sm_unregister_req_t*)payload;
+            sm_log(SM_LOG_DEBUG, "unregister '%s' from PID %d",
+                   req->service_name, hdr->client_pid);
+
+            if (sm_validate_service_name(req->service_name) != SM_OK) {
+                reply_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_INVALID);
+                break;
+            }
+
+            // Verify this PID owns the service
+            service_entry_t* entry = sm_registry_find(req->service_name);
+            if (entry && entry->pid != (pid_t)hdr->client_pid) {
+                sm_log(SM_LOG_ERROR, "unregister: PID %u trying to unregister service of PID %d",
+                       hdr->client_pid, entry->pid);
+                reply_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_PERMISSION);
+                break;
+            }
+
+            int rc = sm_registry_remove(req->service_name);
+            reply_size = buf_reply(reply_buf, reply_buf_size, rc);
+            break;
+        }
+        default:
+            sm_log(SM_LOG_ERROR, "unknown message type: %d", hdr->type);
+            reply_size = buf_reply(reply_buf, reply_buf_size, SM_ERR_INVALID);
+    }
+
+    *out_size = reply_size;
+    return reply_size >= 0 ? 0 : -1;
 }

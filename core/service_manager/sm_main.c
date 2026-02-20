@@ -19,8 +19,65 @@
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#include <fcntl.h>
 
 #pragma GCC diagnostic ignored "-Wstringop-truncation"
+
+// ── CLIENT CONNECTION STATE ────────────────────────────────────────────────────
+
+#define MAX_CLIENTS 32
+
+typedef enum {
+    CLIENT_READING_HEADER,
+    CLIENT_READING_PAYLOAD,
+    CLIENT_SENDING_REPLY,
+    CLIENT_CLOSED,
+} client_state_t;
+
+typedef struct {
+    int client_state;
+    int fd;
+    int header_received;
+    int payload_received;
+    sm_hdr_t header;
+    char payload[4096];
+    char reply[4096];
+    int reply_size;
+} client_conn_t;
+
+static client_conn_t clients[MAX_CLIENTS];
+
+static int find_free_client_slot(void)
+{
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i].fd < 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void close_client(int slot)
+{
+    if (slot >= 0 && slot < MAX_CLIENTS) {
+        if (clients[slot].fd >= 0) {
+            close(clients[slot].fd);
+        }
+        clients[slot].fd = -1;
+        clients[slot].client_state = CLIENT_CLOSED;
+    }
+}
+
+static void init_clients(void)
+{
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        clients[i].fd = -1;
+        clients[i].client_state = CLIENT_CLOSED;
+        clients[i].header_received = 0;
+        clients[i].payload_received = 0;
+        clients[i].reply_size = 0;
+    }
+}
 
 // ── STATE ──────────────────────────────────────────────────────────────────────
 
@@ -125,6 +182,9 @@ int sm_run(void)
         return -1;
     }
 
+    // Initialize client connection tracking
+    init_clients();
+
     // Setup epoll
     int epoll_fd = epoll_create1(0);
     if (epoll_fd < 0) {
@@ -146,11 +206,11 @@ int sm_run(void)
 
     // ── MAIN EVENT LOOP ───────────────────────────────────────────────────────
 
-    struct epoll_event events[16];
+    struct epoll_event events[MAX_CLIENTS + 1];
     time_t last_health_check = time(NULL);
 
     while (running) {
-        int n = epoll_wait(epoll_fd, events, 16, 3000);
+        int n = epoll_wait(epoll_fd, events, MAX_CLIENTS + 1, 3000);
 
         if (n < 0) {
             if (errno == EINTR) {
@@ -166,13 +226,110 @@ int sm_run(void)
             break;
         }
 
-        // Handle new connections
+        // Process events
         for (int i = 0; i < n; i++) {
+            // Accept new connections
             if (events[i].data.fd == server_fd) {
-                int client_fd = accept(server_fd, NULL, NULL);
-                if (client_fd >= 0) {
-                    sm_handle_client(client_fd);
-                    close(client_fd);
+                while (1) {
+                    int client_fd = accept(server_fd, NULL, NULL);
+                    if (client_fd < 0) {
+                        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                            sm_log(SM_LOG_ERROR, "accept failed: %m");
+                        }
+                        break;
+                    }
+
+                    // Find a free slot
+                    int slot = find_free_client_slot();
+                    if (slot < 0) {
+                        sm_log(SM_LOG_WARN, "max clients reached, dropping connection");
+                        close(client_fd);
+                        break;
+                    }
+
+                    // Set non-blocking
+                    fcntl(client_fd, F_SETFL, O_NONBLOCK);
+
+                    // Track client
+                    clients[slot].fd = client_fd;
+                    clients[slot].client_state = CLIENT_READING_HEADER;
+                    clients[slot].header_received = 0;
+                    clients[slot].payload_received = 0;
+
+                    // Add to epoll
+                    struct epoll_event ev = { .events = EPOLLIN, .data.ptr = &clients[slot] };
+                    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev) < 0) {
+                        sm_log(SM_LOG_ERROR, "epoll_ctl add client failed: %m");
+                        close(client_fd);
+                        clients[slot].fd = -1;
+                    }
+                }
+            } else {
+                // Handle client data
+                client_conn_t* client = (client_conn_t*)events[i].data.ptr;
+                if (!client || client->fd < 0) continue;
+
+                if (events[i].events & EPOLLIN) {
+                    // Read header
+                    if (client->client_state == CLIENT_READING_HEADER) {
+                        int remaining = sizeof(sm_hdr_t) - client->header_received;
+                        int nr = recv(client->fd, (char*)&client->header + client->header_received, remaining, 0);
+                        if (nr <= 0) {
+                            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->fd, NULL);
+                            close_client(client - clients);
+                            continue;
+                        }
+                        client->header_received += nr;
+
+                        if (client->header_received == sizeof(sm_hdr_t)) {
+                            // Validate and prepare for payload
+                            if (sm_validate_header(&client->header, sizeof(sm_hdr_t)) < 0) {
+                                sm_log(SM_LOG_WARN, "invalid header from client");
+                                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->fd, NULL);
+                                close_client(client - clients);
+                                continue;
+                            }
+                            client->client_state = CLIENT_READING_PAYLOAD;
+                            client->payload_received = 0;
+                        }
+                    }
+                    // Read payload
+                    else if (client->client_state == CLIENT_READING_PAYLOAD) {
+                        int remaining = client->header.length - client->payload_received;
+                        if (remaining > 0) {
+                            int nr = recv(client->fd, client->payload + client->payload_received, remaining, 0);
+                            if (nr <= 0) {
+                                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->fd, NULL);
+                                close_client(client - clients);
+                                continue;
+                            }
+                            client->payload_received += nr;
+                        }
+
+                        if ((uint32_t)client->payload_received == client->header.length) {
+                            // Message complete - handle it
+                            sm_handle_client_async(client->fd, &client->header, client->payload, 
+                                                  client->reply, sizeof(client->reply), &client->reply_size);
+                            client->client_state = CLIENT_SENDING_REPLY;
+
+                            // Switch to write mode
+                            struct epoll_event ev = { .events = EPOLLOUT, .data.ptr = client };
+                            epoll_ctl(epoll_fd, EPOLL_CTL_MOD, client->fd, &ev);
+                        }
+                    }
+                }
+
+                if (events[i].events & EPOLLOUT) {
+                    // Send reply
+                    if (client->client_state == CLIENT_SENDING_REPLY) {
+                        int nw = send(client->fd, client->reply, client->reply_size, 0);
+                        if (nw < 0) {
+                            sm_log(SM_LOG_ERROR, "send reply failed: %m");
+                        }
+                        // Close after sending reply
+                        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client->fd, NULL);
+                        close_client(client - clients);
+                    }
                 }
             }
         }
@@ -187,6 +344,13 @@ int sm_run(void)
 
     // ── SHUTDOWN ──────────────────────────────────────────────────────────────
 
+    // Close all client connections
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i].fd >= 0) {
+            close(clients[i].fd);
+        }
+    }
+
     close(epoll_fd);
     cleanup();
 
@@ -198,9 +362,20 @@ int sm_run(void)
 // These functions are used by services/apps to communicate with SM
 
 // Persistent connection helpers
-static int _sm_transact(int fd, const void* msg, size_t msg_size, void* reply, size_t reply_size)
+static int _sm_send_message(int fd, const sm_hdr_t* hdr, const void* payload, size_t payload_size)
 {
-    if (send(fd, msg, msg_size, 0) < 0) return -1;
+    // Send header first
+    if (send(fd, hdr, sizeof(sm_hdr_t), 0) < 0) return -1;
+    // Send payload if provided
+    if (payload && payload_size > 0) {
+        if (send(fd, payload, payload_size, 0) < 0) return -1;
+    }
+    return 0;
+}
+
+static int _sm_transact(int fd, const sm_hdr_t* hdr, const void* payload, size_t payload_size, void* reply, size_t reply_size)
+{
+    if (_sm_send_message(fd, hdr, payload, payload_size) < 0) return -1;
     if (recv(fd, reply, reply_size, MSG_WAITALL) < 0) return -1;
     return 0;
 }
@@ -242,7 +417,7 @@ int sm_register(const char* name, const char* socket_path, const char* ring_name
     req.pid = getpid();
 
     sm_reply_t reply = {0};
-    if (_sm_transact(fd, &hdr, sizeof(hdr), &reply, sizeof(reply)) < 0) {
+    if (_sm_transact(fd, &hdr, &req, sizeof(req), &reply, sizeof(reply)) < 0) {
         close(fd);
         return SM_ERR_INVALID;
     }
@@ -269,7 +444,7 @@ int sm_lookup(const char* name, char* socket_path_out, char* ring_name_out)
     strncpy(req.service_name, name, SM_MAX_NAME - 1);
 
     sm_lookup_reply_t reply = {0};
-    if (_sm_transact(fd, &hdr, sizeof(hdr), &reply, sizeof(reply)) < 0) {
+    if (_sm_transact(fd, &hdr, &req, sizeof(req), &reply, sizeof(reply)) < 0) {
         close(fd);
         return SM_ERR_INVALID;
     }
@@ -299,7 +474,7 @@ int sm_heartbeat(const char* name)
     strncpy(req.service_name, name, SM_MAX_NAME - 1);
 
     sm_reply_t reply = {0};
-    if (_sm_transact(fd, &hdr, sizeof(hdr), &reply, sizeof(reply)) < 0) {
+    if (_sm_transact(fd, &hdr, &req, sizeof(req), &reply, sizeof(reply)) < 0) {
         close(fd);
         return SM_ERR_INVALID;
     }
@@ -326,7 +501,7 @@ int sm_unregister(const char* name)
     strncpy(req.service_name, name, SM_MAX_NAME - 1);
 
     sm_reply_t reply = {0};
-    if (_sm_transact(fd, &hdr, sizeof(hdr), &reply, sizeof(reply)) < 0) {
+    if (_sm_transact(fd, &hdr, &req, sizeof(req), &reply, sizeof(reply)) < 0) {
         close(fd);
         return SM_ERR_INVALID;
     }

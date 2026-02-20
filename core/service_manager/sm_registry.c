@@ -191,6 +191,14 @@ int sm_registry_remove(const char* name)
         registry[i] = registry[i + 1];
     registry_count--;
 
+    // Rebuild hash table to fix stale indices
+    memset(hash_pool, 0, sizeof(hash_pool));
+    memset(hash_table, 0, sizeof(hash_table));
+    hash_pool_used = 0;
+    for (int i = 0; i < registry_count; i++) {
+        hash_insert(registry[i].name, i);
+    }
+
     pthread_rwlock_unlock(&registry_lock);
     return SM_OK;
 }
@@ -200,8 +208,27 @@ int sm_registry_get_all(service_entry_t** out, int* count)
     if (!out || !count) return SM_ERR_INVALID;
 
     pthread_rwlock_rdlock(&registry_lock);
+    
+    // Allocate copy of registry data while holding lock
+    if (registry_count == 0) {
+        *count = 0;
+        *out = NULL;
+        pthread_rwlock_unlock(&registry_lock);
+        return SM_OK;
+    }
+
+    size_t copy_size = registry_count * sizeof(service_entry_t);
+    service_entry_t* copy = (service_entry_t*)malloc(copy_size);
+    if (!copy) {
+        pthread_rwlock_unlock(&registry_lock);
+        sm_log(SM_LOG_ERROR, "failed to allocate registry copy");
+        return SM_ERR_INVALID;
+    }
+
+    memcpy(copy, registry, copy_size);
     *count = registry_count;
-    *out = registry;
+    *out = copy;
+
     pthread_rwlock_unlock(&registry_lock);
     return SM_OK;
 }
@@ -212,6 +239,13 @@ int sm_registry_count(void)
     int count = registry_count;
     pthread_rwlock_unlock(&registry_lock);
     return count;
+}
+
+void sm_registry_free_copy(service_entry_t* copy)
+{
+    if (copy) {
+        free(copy);
+    }
 }
 
 void sm_registry_cleanup(void)

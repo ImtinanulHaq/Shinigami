@@ -6,9 +6,15 @@
 
 // ── MESSAGE HANDLERS ───────────────────────────────────────────────────────────
 
-// Handle client connection and dispatch message
+// Handle client connection and dispatch message (synchronous, closes fd)
 // Returns: 0 on success, < 0 on error
 int  sm_handle_client(int client_fd);
+
+// Handle client message asynchronously (non-blocking)
+// Fills reply buffer and returns number of bytes to send
+// Returns: number of bytes in reply buffer
+int  sm_handle_client_async(int client_fd, const sm_hdr_t* hdr, const void* payload, 
+                            void* reply_buf, int reply_buf_size, int* out_size);
 
 // Individual handlers
 int  sm_handle_register(int fd, const sm_hdr_t* hdr, const sm_register_req_t* req);
