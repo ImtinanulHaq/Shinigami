@@ -1,0 +1,68 @@
+CC       := gcc
+CFLAGS   := -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I./core
+LDFLAGS  := -lpthread
+
+SM_DIR   := core/service_manager
+BUILD_DIR := build
+
+SM_SRCS  := $(SM_DIR)/sm_protocol.c \
+            $(SM_DIR)/sm_logging.c \
+            $(SM_DIR)/sm_security.c \
+            $(SM_DIR)/sm_registry.c \
+            $(SM_DIR)/sm_socket.c \
+            $(SM_DIR)/sm_rate_limit.c \
+            $(SM_DIR)/sm_health.c \
+            $(SM_DIR)/sm_handlers.c \
+            $(SM_DIR)/sm_main.c
+
+SM_OBJS  := $(patsubst %.c, $(BUILD_DIR)/%.o, $(SM_SRCS))
+TARGET   := servicemanager
+
+GREEN  := \033[32m
+YELLOW := \033[33m
+RESET  := \033[0m
+
+# ============================================================================
+
+all: $(TARGET)
+
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)/$(SM_DIR)
+
+$(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@echo "$(GREEN)[CC]$(RESET) $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(TARGET): $(SM_OBJS)
+	@echo "$(GREEN)[LD]$(RESET) $@"
+	@$(CC) $(SM_OBJS) -o $@ $(LDFLAGS)
+	@echo "$(GREEN)✓ Built: $@$(RESET)"
+
+debug: CFLAGS += -g -DDEBUG
+debug: $(TARGET)
+
+hardened: CFLAGS += -fPIE
+hardened: LDFLAGS += -pie
+hardened: $(TARGET)
+
+check: $(TARGET)
+	@file $(TARGET) && echo "$(GREEN)✓ Binary OK$(RESET)"
+
+clean:
+	@rm -rf $(BUILD_DIR) $(TARGET)
+	@echo "$(GREEN)✓ Cleaned$(RESET)"
+
+install: $(TARGET)
+	@install -m 755 $(TARGET) /usr/local/bin/
+	@echo "$(GREEN)✓ Installed to /usr/local/bin$(RESET)"
+
+help:
+	@echo "$(GREEN)Service Manager$(RESET)"
+	@echo "  make         - Build binary"
+	@echo "  make debug   - Build with debug"
+	@echo "  make hardened - Build hardened PIE"
+	@echo "  make clean   - Remove artifacts"
+	@echo "  make check   - Validate binary"
+	@echo "  make install - Install to /usr/local/bin"
+
+.PHONY: all debug hardened check clean install help

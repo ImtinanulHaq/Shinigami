@@ -3,73 +3,60 @@
 
 #include <stdint.h>
 #include <sys/types.h>
+#include "service_manager/sm_protocol.h"
+
+// ========== SERVICE MANAGER — PROFESSIONAL ARCHITECTURE ==========
+//
+// MODULAR DESIGN:
+// ├── sm_protocol.{h,c}     Protocol definition, validation (strong typing)
+// ├── sm_logging.{h,c}      Centralized logging (syslog + file rotation)
+// ├── sm_security.{h,c}     Privilege drop, capabilities, seccomp, sandbox
+// ├── sm_registry.{h,c}     Service registry with hash table (thread-safe)
+// ├── sm_socket.{h,c}       Socket setup and management
+// ├── sm_handlers.{h,c}     Message handlers with validation
+// ├── sm_rate_limit.{h,c}   DoS protection (per-PID + global limits)
+// ├── sm_health.{h,c}       Health checks, restart with exponential backoff
+// └── sm_main.c             Main loop and client API
 
 // ── CONSTANTS ──────────────────────────────────────────────────────────────────
 
-#define SM_SOCKET_PATH      "/tmp/servicemanager.sock"  // unix socket path
-#define SM_MAX_SERVICES     32                           // max services allowed
-#define SM_MAX_NAME         64                           // service name max length
-#define SM_MAX_PATH         128                          // path max length
-#define SM_HEARTBEAT_TIMEOUT 10                          // seconds before restart
+#define SM_SOCKET_PATH      "/run/servicemanager.sock"   // FHS compliant
+#define SM_MAX_SERVICES     32
+#define SM_MAX_NAME         64
+#define SM_MAX_PATH         256
 
-// ── MESSAGE TYPES (what client sends to service manager) ──────────────────────
-
-#define SM_MSG_REGISTER     1   // service saying "i am alive, register me"
-#define SM_MSG_LOOKUP       2   // app asking "where is audio service?"
-#define SM_MSG_HEARTBEAT    3   // service saying "i am still alive"
-#define SM_MSG_UNREGISTER   4   // service saying "i am shutting down"
-
-// ── RESPONSE CODES ─────────────────────────────────────────────────────────────
+// ── RESPONSE CODES ────────────────────────────────────────────────────────────
 
 #define SM_OK               0
 #define SM_ERR_NOT_FOUND   -1
 #define SM_ERR_FULL        -2
 #define SM_ERR_EXISTS      -3
 #define SM_ERR_INVALID     -4
+#define SM_ERR_PROTOCOL    -5
+#define SM_ERR_PERMISSION  -6
+#define SM_ERR_RATELIMIT   -7
 
-// ── SERVICE STATUS ─────────────────────────────────────────────────────────────
+// ── SERVER API ─────────────────────────────────────────────────────────────────
 
-typedef enum {
-    SERVICE_RUNNING  = 0,
-    SERVICE_STOPPED  = 1,
-    SERVICE_CRASHED  = 2,
-} service_status_t;
-
-// ── SERVICE ENTRY — one record per registered service ─────────────────────────
-
-typedef struct {
-    char             name[SM_MAX_NAME];       // "audio", "sensor", "camera"
-    char             socket_path[SM_MAX_PATH]; // "/tmp/audio.sock"
-    char             ring_name[SM_MAX_PATH];   // "/ring_audio"
-    pid_t            pid;                      // process id of service
-    service_status_t status;
-    time_t           last_heartbeat;           // timestamp of last heartbeat
-} service_entry_t;
-
-// ── MESSAGE — sent over unix socket between app/service and manager ───────────
-
-typedef struct {
-    int  type;                    // SM_MSG_REGISTER, LOOKUP, etc.
-    char service_name[SM_MAX_NAME];
-    char socket_path[SM_MAX_PATH];
-    char ring_name[SM_MAX_PATH];
-    int  pid;
-    int  response_code;           // SM_OK or error code
-} sm_message_t;
-
-// ── FUNCTION DECLARATIONS ──────────────────────────────────────────────────────
-
-// start the service manager daemon (blocks forever — runs the main loop)
+// Start service manager daemon (blocks forever)
 int  sm_run(void);
 
-// client-side: one-shot calls (open connection, send, receive, close)
+// ── CLIENT API ─────────────────────────────────────────────────────────────────
+
+// One-shot registration
 int  sm_register(const char* name, const char* socket_path, const char* ring_name);
+
+// Lookup service location
 int  sm_lookup(const char* name, char* socket_path_out, char* ring_name_out);
+
+// Send heartbeat
 int  sm_heartbeat(const char* name);
+
+// Unregister service
 int  sm_unregister(const char* name);
 
-// client-side: persistent connection (use when sending many messages)
-int  sm_connect_persistent(void);    // returns fd or -1
-void sm_disconnect(int fd);          // close when done
+// Persistent connection API (for multiple requests)
+int  sm_connect_persistent(void);
+void sm_disconnect(int fd);
 
 #endif // SERVICE_MANAGER_H
