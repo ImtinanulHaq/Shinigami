@@ -4,8 +4,8 @@
 set -e
 
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
-BUILD_DIR="$TESTS_DIR/../../build/core/service_manager"
-SM_EXEC="$BUILD_DIR/servicemanager"
+MIDDLEWARE_ROOT="$TESTS_DIR/../.."
+SM_EXEC="$MIDDLEWARE_ROOT/servicemanager"
 SM_PID=""
 
 # Colors

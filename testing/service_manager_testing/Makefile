@@ -78,14 +78,14 @@ $(BUILD_DIR)/unity.o: unity.c unity.h | $(BUILD_DIR)
 $(BUILD_DIR)/test_sm_protocol: test_sm_protocol.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ test_sm_protocol.c $(BUILD_DIR)/unity.o $(LDFLAGS)
 
-$(BUILD_DIR)/test_sm_registry: test_sm_registry.c $(CORE_DIR)/sm_registry.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_sm_registry.c $(CORE_DIR)/sm_registry.c $(BUILD_DIR)/unity.o $(LDFLAGS)
+$(BUILD_DIR)/test_sm_registry: test_sm_registry.c $(CORE_DIR)/sm_registry.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_sm_registry.c $(CORE_DIR)/sm_registry.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o $(LDFLAGS)
 
-$(BUILD_DIR)/test_sm_crypto: test_sm_crypto.c $(CORE_DIR)/sm_crypto.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_sm_crypto.c $(CORE_DIR)/sm_crypto.c $(BUILD_DIR)/unity.o $(LDFLAGS) -lssl -lcrypto
+$(BUILD_DIR)/test_sm_crypto: test_sm_crypto.c $(CORE_DIR)/sm_crypto.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_sm_crypto.c $(CORE_DIR)/sm_crypto.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o $(LDFLAGS)
 
-$(BUILD_DIR)/test_sm_rate_limit: test_sm_rate_limit.c $(CORE_DIR)/sm_rate_limit.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_sm_rate_limit.c $(CORE_DIR)/sm_rate_limit.c $(BUILD_DIR)/unity.o $(LDFLAGS)
+$(BUILD_DIR)/test_sm_rate_limit: test_sm_rate_limit.c $(CORE_DIR)/sm_rate_limit.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_sm_rate_limit.c $(CORE_DIR)/sm_rate_limit.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o $(LDFLAGS)
 
 # Fuzz target compilation
 $(FUZZ_TARGET): fuzz_target.c | $(BUILD_DIR)
