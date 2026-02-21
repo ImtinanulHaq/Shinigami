@@ -11,11 +11,43 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sys/stat.h>
+#include <time.h>
 
 #define AUDIT_LOG_FILE "/var/log/servicemanager-audit.log"
+#define AUDIT_LOG_MAX_SIZE (10 * 1024 * 1024)  /* 10 MB */
 
 static int audit_fd = -1;
 static pthread_mutex_t audit_mutex = PTHREAD_MUTEX_INITIALIZER;
+static time_t last_rotation_check = 0;
+
+static void audit_rotate_if_needed(void)
+{
+    time_t now = time(NULL);
+    /* Check rotation at most once per minute */
+    if (now - last_rotation_check < 60) return;
+    last_rotation_check = now;
+    
+    struct stat st;
+    if (stat(AUDIT_LOG_FILE, &st) < 0) return;
+    
+    if (st.st_size <= AUDIT_LOG_MAX_SIZE) return;
+    
+    /* File too large, rotate it */
+    char backup[256];
+    snprintf(backup, sizeof(backup), "%s.%ld", AUDIT_LOG_FILE, (long)now);
+    
+    close(audit_fd);
+    audit_fd = -1;
+    
+    rename(AUDIT_LOG_FILE, backup);
+    
+    /* Reopen the log file (will be created fresh) */
+    audit_fd = open(AUDIT_LOG_FILE, 
+                    O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
+    
+    sm_log(SM_LOG_INFO, "audit: rotated log to %s", backup);
+}
 
 static const char* action_name(audit_action_t a)
 {
@@ -59,8 +91,11 @@ void sm_audit_log(audit_action_t action, const char* service,
              details ? details : "");
     
     pthread_mutex_lock(&audit_mutex);
-    ssize_t n = write(audit_fd, buf, strlen(buf));
-    (void)n;  /* suppress unused return value warning */
+    audit_rotate_if_needed();
+    if (audit_fd >= 0) {
+        ssize_t n = write(audit_fd, buf, strlen(buf));
+        (void)n;  /* suppress unused return value warning */
+    }
     pthread_mutex_unlock(&audit_mutex);
     
     sm_log(SM_LOG_INFO, "audit: %s service=%s result=%d uid=%d",

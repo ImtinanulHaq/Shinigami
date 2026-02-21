@@ -9,6 +9,7 @@
 
 #include "sm_management.h"
 #include "sm_logging.h"
+#include "sm_config.h"
 #include "sm_metrics.h"
 #include "sm_registry.h"
 #include <stdio.h>
@@ -21,16 +22,19 @@
 #include <arpa/inet.h>
 
 static int mgmt_fd = -1;
-static int mgmt_running = 0;
+static volatile int mgmt_running = 0;
 
 static void* management_worker(void* arg)
 {
     (void)arg;
     
+    const sm_config_t* config = sm_config_get();
+    int port = config ? config->management_port : 9999;
+    
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    server_addr.sin_port = htons(9999);  /* default port */
+    server_addr.sin_port = htons(port);
     
     mgmt_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (mgmt_fd < 0) {
@@ -55,7 +59,7 @@ static void* management_worker(void* arg)
         return NULL;
     }
     
-    sm_log(SM_LOG_INFO, "management: listening on port 9999");
+    sm_log(SM_LOG_INFO, "management: listening on port %d", port);
     
     /* Accept management connections */
     while (mgmt_running) {
@@ -70,13 +74,17 @@ static void* management_worker(void* arg)
         if (n > 0) {
             buf[n] = '\0';
             
-            /* Simple HTTP response */
-            const char* response =
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Type: application/json\r\n"
-                "Content-Length: 25\r\n"
-                "\r\n"
-                "{\"status\": \"running\"}";
+            /* Simple HTTP response with correct Content-Length */
+            const char* body = "{\"status\":\"running\"}";
+            int body_len = strlen(body);
+            
+            char response[512];
+            snprintf(response, sizeof(response),
+                     "HTTP/1.1 200 OK\r\n"
+                     "Content-Type: application/json\r\n"
+                     "Content-Length: %d\r\n"
+                     "\r\n%s",
+                     body_len, body);
             
             send(client_fd, response, strlen(response), 0);
         }
@@ -93,6 +101,9 @@ int sm_management_start(int port)
     
     if (mgmt_running) return -1;  /* already running */
     
+    /* If port is 0, use configured port */
+    (void)port;
+    
     mgmt_running = 1;
     
     if (pthread_create(&tid, NULL, management_worker, NULL) != 0) {
@@ -102,7 +113,9 @@ int sm_management_start(int port)
     
     pthread_detach(tid);
     
-    sm_log(SM_LOG_INFO, "management: API started on port %d", port);
+    const sm_config_t* config = sm_config_get();
+    int actual_port = config ? config->management_port : 9999;
+    sm_log(SM_LOG_INFO, "management: API started on port %d", actual_port);
     return 0;
 }
 

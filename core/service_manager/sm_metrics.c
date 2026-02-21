@@ -18,12 +18,15 @@ static struct {
     uint64_t total_ratelimit_hits;
     uint64_t total_latency_us;
     uint64_t peak_qps;
+    uint64_t request_count_current_sec;
+    time_t last_qps_reset;
     pthread_mutex_t mutex;
 } g_metrics;
 
 int sm_metrics_init(void)
 {
     memset(&g_metrics, 0, sizeof(g_metrics));
+    g_metrics.last_qps_reset = time(NULL);
     pthread_mutex_init(&g_metrics.mutex, NULL);
     sm_log(SM_LOG_INFO, "metrics: initialized");
     return 0;
@@ -40,10 +43,25 @@ void sm_metrics_request(uint16_t msg_type, int32_t latency_us, int success)
         case SM_MSG_UNREGISTER: idx = 3; break;
     }
     
+    /* Convert latency to uint64_t to handle overflow (negative latencies become very large) */
+    uint64_t latency_u = (uint64_t)(latency_us < 0 ? 0 : latency_us);
+    
     pthread_mutex_lock(&g_metrics.mutex);
     g_metrics.total_requests++;
     g_metrics.by_type[idx]++;
-    g_metrics.total_latency_us += latency_us;
+    g_metrics.total_latency_us += latency_u;
+    g_metrics.request_count_current_sec++;
+    
+    /* Update peak QPS every second */
+    time_t now = time(NULL);
+    if (now != g_metrics.last_qps_reset) {
+        if (g_metrics.request_count_current_sec > g_metrics.peak_qps) {
+            g_metrics.peak_qps = g_metrics.request_count_current_sec;
+        }
+        g_metrics.request_count_current_sec = 0;
+        g_metrics.last_qps_reset = now;
+    }
+    
     if (!success) g_metrics.total_errors++;
     pthread_mutex_unlock(&g_metrics.mutex);
 }
@@ -75,6 +93,7 @@ sm_metrics_t sm_metrics_get(void)
     m.total_errors = g_metrics.total_errors;
     m.total_auth_failures = g_metrics.total_auth_failures;
     m.total_ratelimit_hits = g_metrics.total_ratelimit_hits;
+    m.peak_qps = g_metrics.peak_qps;
     
     if (g_metrics.total_requests > 0) {
         m.avg_latency_us = g_metrics.total_latency_us / g_metrics.total_requests;

@@ -12,6 +12,8 @@
 #include <sys/un.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #define SOCKET_PATH "/run/servicemanager.sock"
 
@@ -64,26 +66,58 @@ static int create_connection(void)
     return fd;
 }
 
+static int verify_connection_alive(int fd)
+{
+    /* Test if connection is still alive by checking availability without blocking */
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return 0;
+    
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    
+    /* Try to peek at data without consuming it */
+    char test_byte;
+    ssize_t ret = recv(fd, &test_byte, 1, MSG_PEEK | MSG_DONTWAIT);
+    
+    /* Restore blocking mode */
+    fcntl(fd, F_SETFL, flags);
+    
+    /* Connection is good if: ret == -1 with EAGAIN/EWOULDBLOCK (no data but connected) */
+    if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        return 1;  /* connection is alive */
+    }
+    
+    /* Any other result indicates connection is dead */
+    return 0;
+}
+
 int sm_connpool_get(void)
 {
     int fd = -1;
     
     pthread_mutex_lock(&g_pool.mutex);
     
-    /* Try to get an available connection from pool */
+    /* Try to get a healthy connection from pool */
     for (int i = 0; i < g_pool.max; i++) {
         if (g_pool.fds[i] >= 0) {
-            fd = g_pool.fds[i];
-            g_pool.fds[i] = -1;
-            g_pool.available--;
-            g_pool.in_use++;
-            break;
+            /* Verify connection is still alive before returning it */
+            if (verify_connection_alive(g_pool.fds[i])) {
+                fd = g_pool.fds[i];
+                g_pool.fds[i] = -1;
+                g_pool.available--;
+                g_pool.in_use++;
+                break;
+            } else {
+                /* Connection is dead, close and remove from pool */
+                close(g_pool.fds[i]);
+                g_pool.fds[i] = -1;
+                g_pool.available--;
+            }
         }
     }
     
     pthread_mutex_unlock(&g_pool.mutex);
     
-    /* If no pooled connection, create new one */
+    /* If no pooled connection available, create new one */
     if (fd < 0) {
         fd = create_connection();
         if (fd >= 0) {

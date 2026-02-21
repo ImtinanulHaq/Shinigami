@@ -47,15 +47,22 @@ int sm_health_callback_check(const char* service_name)
     
     pthread_mutex_lock(&cb_mutex);
     
+    /* Find the callback and copy the function pointer to avoid holding the lock during execution */
+    sm_health_check_fn fn = NULL;
     for (int i = 0; i < g_callback_count; i++) {
         if (!strcmp(g_callbacks[i].service_name, service_name)) {
-            int result = g_callbacks[i].fn(service_name);
-            pthread_mutex_unlock(&cb_mutex);
-            return result;
+            fn = g_callbacks[i].fn;
+            break;
         }
     }
     
     pthread_mutex_unlock(&cb_mutex);
+    
+    /* Execute the callback outside the lock to prevent deadlock */
+    if (fn) {
+        return fn(service_name);
+    }
+    
     return 0;  /* no callback, assume healthy */
 }
 

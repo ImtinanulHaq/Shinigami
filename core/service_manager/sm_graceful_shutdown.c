@@ -9,20 +9,26 @@
 #include "sm_registry.h"
 #include "sm_persistence.h"
 #include <signal.h>
-#include <unistd.h>
+#include <unistd.h>  /* for usleep */
 #include <string.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 #define MAX_SHUTDOWN_HOOKS 10
 
 static void (*g_shutdown_hooks[MAX_SHUTDOWN_HOOKS])(void);
 static int g_hook_count = 0;
+static pthread_mutex_t hooks_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void sm_register_shutdown_hook(void (*hook)(void))
 {
-    if (hook && g_hook_count < MAX_SHUTDOWN_HOOKS) {
+    if (!hook) return;
+    
+    pthread_mutex_lock(&hooks_mutex);
+    if (g_hook_count < MAX_SHUTDOWN_HOOKS) {
         g_shutdown_hooks[g_hook_count++] = hook;
     }
+    pthread_mutex_unlock(&hooks_mutex);
 }
 
 void sm_graceful_shutdown(int timeout_sec)
@@ -33,11 +39,13 @@ void sm_graceful_shutdown(int timeout_sec)
     sm_log(SM_LOG_INFO, "shutdown: graceful shutdown initiated (timeout=%ds)", timeout_sec);
     
     /* Call all registered shutdown hooks */
+    pthread_mutex_lock(&hooks_mutex);
     for (int i = 0; i < g_hook_count; i++) {
         if (g_shutdown_hooks[i]) {
             g_shutdown_hooks[i]();
         }
     }
+    pthread_mutex_unlock(&hooks_mutex);
     
     /* Get all services */
     if (sm_registry_get_all(&services, &count) < 0) {
@@ -56,9 +64,9 @@ void sm_graceful_shutdown(int timeout_sec)
     
     sm_registry_free_copy(services);
     
-    /* Wait for graceful shutdown */
-    for (int i = 0; i < timeout_sec; i++) {
-        sleep(1);
+    /* Wait for graceful shutdown with polling (no blocking sleep) */
+    for (int i = 0; i < timeout_sec * 10; i++) {
+        usleep(100000);  /* 100ms poll interval instead of blocking sleep */
         int running = 0;
         if (sm_registry_get_all(&services, &count) == 0) {
             for (int j = 0; j < count; j++) {

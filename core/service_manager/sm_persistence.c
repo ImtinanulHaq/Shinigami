@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #define DEFAULT_PERSISTENCE_FILE "/var/lib/servicemanager/registry.dat"
+#define SM_REGISTRY_MAX 32  /* Must match sm_registry.c */
 
 int sm_persistence_save(const char* filename)
 {
@@ -78,6 +79,14 @@ int sm_persistence_load(const char* filename)
     }
     
     if (fread(&count, 4, 1, f) != 1) {
+        fclose(f);
+        return -1;
+    }
+    
+    /* Bounds check: prevent OOM and infinite loops from malformed files */
+    /* Cast to int for comparison to handle the check properly */
+    if ((int)count < 0 || (int)count > SM_REGISTRY_MAX) {
+        sm_log(SM_LOG_ERROR, "persistence: invalid count %u (max %d)", count, SM_REGISTRY_MAX);
         fclose(f);
         return -1;
     }

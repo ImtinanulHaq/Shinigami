@@ -15,7 +15,7 @@
 
 #include <time.h>
 #include <signal.h>
-#include <unistd.h>
+#include <unistd.h>  /* for usleep */
 
 void sm_health_check(void)
 {
@@ -79,9 +79,21 @@ void sm_health_check(void)
                        name, restart_count + 1, SM_HEALTH_MAX_RESTARTS,
                        (long)since_crash, backoff);
 
-                /* Send SIGKILL to ensure the old process is gone */
+                /* Send SIGTERM first for graceful shutdown, then SIGKILL if needed */
                 if (services[i].pid > 1) {
-                    kill(services[i].pid, SIGKILL);
+                    sm_log(SM_LOG_INFO, "health: sending SIGTERM to '%s' (pid=%d)",
+                           name, (int)services[i].pid);
+                    kill(services[i].pid, SIGTERM);
+                    
+                    /* Wait briefly for graceful termination (100ms) */
+                    usleep(100000);
+                    
+                    /* Check if process still exists, kill if necessary */
+                    if (kill(services[i].pid, 0) == 0) {
+                        sm_log(SM_LOG_WARN, "health: sending SIGKILL to '%s' (pid=%d)",
+                               name, (int)services[i].pid);
+                        kill(services[i].pid, SIGKILL);
+                    }
                 }
 
                 /*

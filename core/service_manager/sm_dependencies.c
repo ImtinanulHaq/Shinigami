@@ -8,13 +8,16 @@
 #include "sm_logging.h"
 #include <string.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 #define MAX_SERVICES_TRACKED 32
+#define MAX_RECURSION_DEPTH 10
 
 static struct {
     service_deps_t deps[MAX_SERVICES_TRACKED];
     int count;
-} g_deps;
+    pthread_mutex_t mutex;
+} g_deps = { .mutex = PTHREAD_MUTEX_INITIALIZER };  /* Static initialization */
 
 int sm_deps_register(const char* name, const char** dependencies, int dep_count)
 {
@@ -22,14 +25,18 @@ int sm_deps_register(const char* name, const char** dependencies, int dep_count)
         return -1;
     }
     
+    pthread_mutex_lock(&g_deps.mutex);
+    
     /* Check if already registered */
     for (int i = 0; i < g_deps.count; i++) {
         if (!strcmp(g_deps.deps[i].service_name, name)) {
+            pthread_mutex_unlock(&g_deps.mutex);
             return -1;  /* already exists */
         }
     }
     
     if (g_deps.count >= MAX_SERVICES_TRACKED) {
+        pthread_mutex_unlock(&g_deps.mutex);
         return -1;  /* table full */
     }
     
@@ -41,6 +48,8 @@ int sm_deps_register(const char* name, const char** dependencies, int dep_count)
         strncpy(d->depends_on[i], dependencies[i], sizeof(d->depends_on[i]) - 1);
     }
     
+    pthread_mutex_unlock(&g_deps.mutex);
+    
     sm_log(SM_LOG_INFO, "deps: registered '%s' with %d dependencies", name, dep_count);
     return 0;
 }
@@ -48,6 +57,8 @@ int sm_deps_register(const char* name, const char** dependencies, int dep_count)
 int sm_deps_check_satisfied(const char* name)
 {
     if (!name) return -1;
+    
+    pthread_mutex_lock(&g_deps.mutex);
     
     for (int i = 0; i < g_deps.count; i++) {
         if (!strcmp(g_deps.deps[i].service_name, name)) {
@@ -66,14 +77,22 @@ int sm_deps_check_satisfied(const char* name)
                     break;
                 }
             }
+            pthread_mutex_unlock(&g_deps.mutex);
             return all_satisfied ? 0 : 1;
         }
     }
+    pthread_mutex_unlock(&g_deps.mutex);
     return 0;  /* service not tracked */
 }
 
-static int has_circular_visit(const char* name, int* visited, int* rec_stack)
+static int has_circular_visit(const char* name, int* visited, int* rec_stack, int depth)
 {
+    /* Prevent stack overflow from deep circular dependencies */
+    if (depth > MAX_RECURSION_DEPTH) {
+        sm_log(SM_LOG_ERROR, "deps: recursion depth limit exceeded");
+        return 1;  /* treat as cycle */
+    }
+    
     for (int i = 0; i < g_deps.count; i++) {
         if (!strcmp(g_deps.deps[i].service_name, name)) {
             visited[i] = 1;
@@ -83,7 +102,7 @@ static int has_circular_visit(const char* name, int* visited, int* rec_stack)
                 for (int k = 0; k < g_deps.count; k++) {
                     if (!strcmp(g_deps.deps[k].service_name, g_deps.deps[i].depends_on[j])) {
                         if (!visited[k]) {
-                            if (has_circular_visit(g_deps.deps[k].service_name, visited, rec_stack)) {
+                            if (has_circular_visit(g_deps.deps[k].service_name, visited, rec_stack, depth + 1)) {
                                 return 1;
                             }
                         } else if (rec_stack[k]) {
@@ -106,15 +125,19 @@ int sm_deps_detect_circular(void)
     int visited[MAX_SERVICES_TRACKED] = {0};
     int rec_stack[MAX_SERVICES_TRACKED] = {0};
     
+    pthread_mutex_lock(&g_deps.mutex);
+    
     for (int i = 0; i < g_deps.count; i++) {
         if (!visited[i]) {
-            if (has_circular_visit(g_deps.deps[i].service_name, visited, rec_stack)) {
+            if (has_circular_visit(g_deps.deps[i].service_name, visited, rec_stack, 0)) {
+                pthread_mutex_unlock(&g_deps.mutex);
                 sm_log(SM_LOG_ERROR, "deps: circular dependency detected");
                 return 1;
             }
         }
     }
     
+    pthread_mutex_unlock(&g_deps.mutex);
     return 0;
 }
 
@@ -165,5 +188,7 @@ int sm_deps_service_ready(const char* name)
 
 void sm_deps_cleanup(void)
 {
+    pthread_mutex_lock(&g_deps.mutex);
     memset(&g_deps, 0, sizeof(g_deps));
+    pthread_mutex_unlock(&g_deps.mutex);
 }

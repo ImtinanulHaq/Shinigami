@@ -58,6 +58,16 @@ static int parse_int(const char* value)
     return atoi(value);
 }
 
+static int parse_octal_or_decimal(const char* value)
+{
+    if (!value) return 0;
+    /* Use strtol with base 8 to properly parse octal numbers like 0660 */
+    if (value[0] == '0' && (value[1] >= '0' && value[1] <= '7')) {
+        return (int)strtol(value, NULL, 8);  /* octal */
+    }
+    return atoi(value);  /* decimal */
+}
+
 static char* str_trim(char* s)
 {
     while (*s && isspace((unsigned char)*s)) s++;
@@ -113,7 +123,7 @@ int sm_config_load(const char* filename)
         }
         else if (!strcmp(section, "socket")) {
             if (!strcmp(key, "path")) strncpy(g_config.socket_path, val, sizeof(g_config.socket_path) - 1);
-            else if (!strcmp(key, "mode")) g_config.socket_mode = parse_int(val);
+            else if (!strcmp(key, "mode")) g_config.socket_mode = parse_octal_or_decimal(val);
         }
         else if (!strcmp(section, "rate_limit")) {
             if (!strcmp(key, "pid_capacity")) g_config.rate_pid_capacity = parse_int(val);
@@ -154,6 +164,38 @@ int sm_config_set_int(const char* key, int value)
     else if (!strcmp(key, "max_restarts")) g_config.max_restarts = value;
     else if (!strcmp(key, "heartbeat_timeout")) g_config.heartbeat_timeout = value;
     else return -1;
+    
+    return 0;
+}
+
+int sm_config_set_string(const char* section, const char* key, const char* value)
+{
+    if (!section || !key || !value) return -1;
+    
+    if (!strcmp(section, "logging")) {
+        if (!strcmp(key, "file")) {
+            strncpy(g_config.log_file, value, sizeof(g_config.log_file) - 1);
+            g_config.log_file[sizeof(g_config.log_file) - 1] = '\0';
+        }
+        else return -1;
+    }
+    else if (!strcmp(section, "socket")) {
+        if (!strcmp(key, "path")) {
+            strncpy(g_config.socket_path, value, sizeof(g_config.socket_path) - 1);
+            g_config.socket_path[sizeof(g_config.socket_path) - 1] = '\0';
+        }
+        else return -1;
+    }
+    else if (!strcmp(section, "persistence")) {
+        if (!strcmp(key, "file")) {
+            strncpy(g_config.persistence_file, value, sizeof(g_config.persistence_file) - 1);
+            g_config.persistence_file[sizeof(g_config.persistence_file) - 1] = '\0';
+        }
+        else return -1;
+    }
+    else {
+        return -1;
+    }
     
     return 0;
 }
