@@ -15,7 +15,7 @@
 
 #include <time.h>
 #include <signal.h>
-#include <unistd.h>  /* for usleep */
+#include <unistd.h>
 
 void sm_health_check(void)
 {
@@ -85,8 +85,9 @@ void sm_health_check(void)
                            name, (int)services[i].pid);
                     kill(services[i].pid, SIGTERM);
                     
-                    /* Wait briefly for graceful termination (100ms) */
-                    usleep(100000);
+                    /* Wait briefly for graceful termination (100ms) using POSIX nanosleep */
+                    struct timespec ts = {0, 100000000};  /* 100ms in nanoseconds */
+                    nanosleep(&ts, NULL);
                     
                     /* Check if process still exists, kill if necessary */
                     if (kill(services[i].pid, 0) == 0) {

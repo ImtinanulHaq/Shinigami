@@ -9,7 +9,7 @@
 #include "sm_registry.h"
 #include "sm_persistence.h"
 #include <signal.h>
-#include <unistd.h>  /* for usleep */
+#include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -66,7 +66,10 @@ void sm_graceful_shutdown(int timeout_sec)
     
     /* Wait for graceful shutdown with polling (no blocking sleep) */
     for (int i = 0; i < timeout_sec * 10; i++) {
-        usleep(100000);  /* 100ms poll interval instead of blocking sleep */
+        /* Use POSIX-compliant nanosleep instead of usleep */
+        struct timespec ts = {0, 100000000};  /* 100ms in nanoseconds */
+        nanosleep(&ts, NULL);
+        
         int running = 0;
         if (sm_registry_get_all(&services, &count) == 0) {
             for (int j = 0; j < count; j++) {
