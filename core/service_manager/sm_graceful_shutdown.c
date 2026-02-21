@@ -54,39 +54,11 @@ void sm_graceful_shutdown(int timeout_sec)
         return;
     }
     
-    /* Send SIGTERM to all services in dependency-aware order (dependents first) */
-    bool terminated[32] = {0};  /* Track which services have been terminated (max 32) */
-    int terminated_count = 0;
-    
-    /* First pass: terminate services that have no dependents on them */
-    for (int i = 0; i < count; i++) {
-        if (services[i].status == SERVICE_STOPPED || services[i].pid <= 1) continue;
-        if (terminated[i]) continue;
-        
-        /* Check if any remaining service depends on this one */
-        bool has_dependents = 0;
-        for (int j = 0; j < count; j++) {
-            if (i == j || terminated[j]) continue;
-            if (services[j].status == SERVICE_STOPPED) continue;
-            if (sm_deps_depends_on(services[j].name, services[i].name)) {
-                has_dependents = 1;
-                break;
-            }
-        }
-        
-        /* If no remaining services depend on this one, terminate it */
-        if (!has_dependents) {
-            sm_log(SM_LOG_INFO, "shutdown: sending SIGTERM to '%s' (pid=%d)",
-                   services[i].name, (int)services[i].pid);
-            kill(services[i].pid, SIGTERM);
-            terminated[i] = 1;
-            terminated_count++;
-        }
-    }
-    
-    /* Second pass: terminate remaining services in reverse registration order */
+    /* Send SIGTERM to all services in reverse registration order
+     * This respects dependency ordering where dependents are registered after
+     * their dependencies */
     for (int i = count - 1; i >= 0; i--) {
-        if (services[i].status != SERVICE_STOPPED && services[i].pid > 1 && !terminated[i]) {
+        if (services[i].status != SERVICE_STOPPED && services[i].pid > 1) {
             sm_log(SM_LOG_INFO, "shutdown: sending SIGTERM to '%s' (pid=%d)",
                    services[i].name, (int)services[i].pid);
             kill(services[i].pid, SIGTERM);

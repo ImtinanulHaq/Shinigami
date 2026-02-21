@@ -24,6 +24,7 @@
 #include "sm_metrics.h"
 #include "sm_audit.h"
 #include "sm_structured_log.h"
+#include "sm_request_id.h"
 
 #include <string.h>
 #include <unistd.h>
@@ -267,16 +268,25 @@ int sm_handle_client(int client_fd)
     pid_t           peer_pid;
     const uint8_t*  key;
     int             rc      = 0;
+    request_id_t    req_id;
+
+    /* Generate and set request ID for this request (for distributed tracing) */
+    req_id = sm_request_id_generate();
+    sm_request_id_set(req_id);
 
     /* Apply I/O timeout immediately - before any blocking recv() call */
-    if (set_socket_timeout(client_fd) < 0)
+    if (set_socket_timeout(client_fd) < 0) {
+        sm_request_id_clear();
         return -1;
+    }
 
     peer_pid = sm_get_peer_pid(client_fd);
 
     /* Rate limit check using kernel-verified PID */
     if (sm_rate_limit_check(peer_pid) != SM_OK) {
-        sm_log(SM_LOG_WARN, "handlers: rate limit hit for pid=%d", (int)peer_pid);
+        sm_log(SM_LOG_WARN, "handlers: rate limit hit for pid=%d [req=%s]",
+               (int)peer_pid, sm_request_id_str(req_id));
+        sm_request_id_clear();
         return -1;
     }
 

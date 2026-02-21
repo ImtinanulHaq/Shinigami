@@ -47,21 +47,6 @@ void sm_health_check(void)
                        name, (long)age, (int)services[i].pid);
                 sm_registry_update_status(name, SERVICE_CRASHED);
                 
-                /* Mark all dependents as crashed when their dependency fails */
-                service_entry_t* all_services = NULL;
-                int all_count = 0;
-                if (sm_registry_get_all(&all_services, &all_count) >= 0) {
-                    for (int j = 0; j < all_count; j++) {
-                        if (sm_deps_depends_on(all_services[j].name, name)) {
-                            sm_log(SM_LOG_WARN,
-                                   "health: dependent '%s' crashed due to '%s' failure",
-                                   all_services[j].name, name);
-                            sm_registry_update_status(all_services[j].name, SERVICE_CRASHED);
-                        }
-                    }
-                    sm_registry_free_copy(all_services);
-                }
-                
                 /* Re-read status for the restart logic below */
                 services[i].status = SERVICE_CRASHED;
             }

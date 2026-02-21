@@ -26,6 +26,7 @@ SM_SRCS  := $(SM_DIR)/sm_crypto.c \
             $(SM_DIR)/sm_management.c \
             $(SM_DIR)/sm_connection_pool.c \
             $(SM_DIR)/sm_advanced_ratelimit.c \
+            $(SM_DIR)/sm_request_id.c \
             $(SM_DIR)/sm_main.c
 
 SM_OBJS  := $(patsubst %.c, $(BUILD_DIR)/%.o, $(SM_SRCS))
