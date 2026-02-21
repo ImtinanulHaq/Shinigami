@@ -19,6 +19,7 @@
 #include "sm_protocol.h"
 #include "sm_crypto.h"
 #include "sm_rate_limit.h"
+#include "sm_advanced_ratelimit.h"
 #include "sm_security.h"
 #include "sm_metrics.h"
 #include "sm_audit.h"
@@ -98,6 +99,14 @@ int sm_handle_register(int fd, const sm_hdr_t* hdr, const sm_register_req_t* req
 
     (void)hdr;
 
+    /* Check rate limit for this operation */
+    if (sm_ratelimit_check_extended(peer_pid, req->service_name, SM_MSG_REGISTER) < 0) {
+        sm_log(SM_LOG_WARN, "handlers: register rate limit exceeded for '%s' from pid=%d",
+               req->service_name, (int)peer_pid);
+        sm_audit_log(AUDIT_REGISTER, req->service_name, 0, peer_pid, peer_uid, SM_ERR_RATELIMIT, "rate_limit_exceeded");
+        return send_reply(fd, SM_ERR_RATELIMIT);
+    }
+
     sm_log(SM_LOG_DEBUG, "handlers: register '%s' from pid=%d uid=%d",
            req->service_name, (int)peer_pid, (int)peer_uid);
 
@@ -149,8 +158,18 @@ int sm_handle_lookup(int fd, const sm_hdr_t* hdr, const sm_lookup_req_t* req)
      */
     service_entry_t entry_copy = {0};
     int             rc;
+    pid_t           peer_pid   = sm_get_peer_pid(fd);
+    uid_t           peer_uid   = sm_get_peer_uid(fd);
 
     (void)hdr;
+
+    /* Check rate limit for this operation */
+    if (sm_ratelimit_check_extended(peer_pid, req->service_name, SM_MSG_LOOKUP) < 0) {
+        sm_log(SM_LOG_WARN, "handlers: lookup rate limit exceeded for '%s' from pid=%d",
+               req->service_name, (int)peer_pid);
+        sm_audit_log(AUDIT_LOOKUP, req->service_name, 0, peer_pid, peer_uid, SM_ERR_RATELIMIT, "rate_limit_exceeded");
+        return send_reply(fd, SM_ERR_RATELIMIT);
+    }
 
     if (sm_validate_service_name(req->service_name) != SM_OK)
         return send_reply(fd, SM_ERR_INVALID);
@@ -174,9 +193,19 @@ int sm_handle_lookup(int fd, const sm_hdr_t* hdr, const sm_lookup_req_t* req)
 
 int sm_handle_heartbeat(int fd, const sm_hdr_t* hdr, const sm_heartbeat_req_t* req)
 {
-    int rc;
+    int   rc;
+    pid_t peer_pid = sm_get_peer_pid(fd);
+    uid_t peer_uid = sm_get_peer_uid(fd);
 
     (void)hdr;
+
+    /* Check rate limit for this operation */
+    if (sm_ratelimit_check_extended(peer_pid, req->service_name, SM_MSG_HEARTBEAT) < 0) {
+        sm_log(SM_LOG_WARN, "handlers: heartbeat rate limit exceeded for '%s' from pid=%d",
+               req->service_name, (int)peer_pid);
+        sm_audit_log(AUDIT_HEARTBEAT, req->service_name, 0, peer_pid, peer_uid, SM_ERR_RATELIMIT, "rate_limit_exceeded");
+        return send_reply(fd, SM_ERR_RATELIMIT);
+    }
 
     if (sm_validate_service_name(req->service_name) != SM_OK)
         return send_reply(fd, SM_ERR_INVALID);
@@ -195,8 +224,17 @@ int sm_handle_heartbeat(int fd, const sm_hdr_t* hdr, const sm_heartbeat_req_t* r
 int sm_handle_unregister(int fd, const sm_hdr_t* hdr, const sm_unregister_req_t* req)
 {
     pid_t peer_pid = sm_get_peer_pid(fd);   /* kernel-verified via SO_PEERCRED */
+    uid_t peer_uid = sm_get_peer_uid(fd);
 
     (void)hdr;
+
+    /* Check rate limit for this operation */
+    if (sm_ratelimit_check_extended(peer_pid, req->service_name, SM_MSG_UNREGISTER) < 0) {
+        sm_log(SM_LOG_WARN, "handlers: unregister rate limit exceeded for '%s' from pid=%d",
+               req->service_name, (int)peer_pid);
+        sm_audit_log(AUDIT_UNREGISTER, req->service_name, 0, peer_pid, peer_uid, SM_ERR_RATELIMIT, "rate_limit_exceeded");
+        return send_reply(fd, SM_ERR_RATELIMIT);
+    }
 
     if (sm_validate_service_name(req->service_name) != SM_OK)
         return send_reply(fd, SM_ERR_INVALID);

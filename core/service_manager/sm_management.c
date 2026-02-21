@@ -259,12 +259,31 @@ static int handle_services(http_request_t* req, char* response_body, int max_len
     }
     
     int pos = snprintf(response_body, max_len, "{\"services\":[");
+    if (pos < 0) pos = 0;
     
-    for (int i = 0; i < count && pos < max_len - 20; i++) {
-        if (i > 0) pos += snprintf(response_body + pos, max_len - pos, ",");
-        pos += snprintf(response_body + pos, max_len - pos,
-                       "{\"name\":\"%s\",\"pid\":%d,\"status\":%d}",
-                       services[i].name, (int)services[i].pid, services[i].status);
+    /* Each service entry needs ~80+ bytes minimum; cap services to avoid buffer overflow */
+    int max_services = (max_len - 64) / 100;  /* Conservative estimate */
+    if (max_services < 1) max_services = 1;
+    
+    for (int i = 0; i < count && i < max_services; i++) {
+        /* Check if we have enough space for one more entry (~100 bytes) */
+        if (pos >= max_len - 100) {
+            /* Truncate and add indicator */
+            pos = snprintf(response_body + pos, max_len - pos, "{\"name\":\"...(truncated)\"}");
+            break;
+        }
+        
+        if (i > 0) {
+            int n = snprintf(response_body + pos, max_len - pos, ",");
+            if (n < 0) break;
+            pos += n;
+        }
+        
+        int n = snprintf(response_body + pos, max_len - pos,
+                        "{\"name\":\"%s\",\"pid\":%d,\"status\":%d}",
+                        services[i].name, (int)services[i].pid, services[i].status);
+        if (n < 0) break;
+        pos += n;
     }
     
     snprintf(response_body + pos, max_len - pos, "]}");
@@ -333,7 +352,7 @@ static void process_management_request(int client_fd)
     
     /* Find and call appropriate handler */
     int status_code = 404;
-    char response_body[2048] = "";
+    char response_body[8192] = "";  /* Increased from 2048 for safety */
     
     for (int i = 0; i < num_endpoints; i++) {
         if (strcmp(endpoints[i].method, req.method) == 0 &&

@@ -10,9 +10,44 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <time.h>
 
 #define DEFAULT_PERSISTENCE_FILE "/var/lib/servicemanager/registry.dat"
 #define SM_REGISTRY_MAX 32  /* Must match sm_registry.c */
+
+static pthread_t autosave_thread = 0;
+static int autosave_running = 0;
+static pthread_mutex_t autosave_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int autosave_interval = 60;  /* Default: save every 60 seconds */
+
+/*
+ * Background thread for periodic autosave
+ */
+static void* autosave_worker(void* arg)
+{
+    (void)arg;
+    
+    while (1) {
+        /* Sleep for the configured interval */
+        sleep(autosave_interval);
+        
+        /* Check if we should still be running */
+        pthread_mutex_lock(&autosave_mutex);
+        if (!autosave_running) {
+            pthread_mutex_unlock(&autosave_mutex);
+            break;
+        }
+        pthread_mutex_unlock(&autosave_mutex);
+        
+        /* Save the registry */
+        if (sm_persistence_save(NULL) < 0) {
+            sm_log(SM_LOG_WARN, "persistence: autosave failed");
+        }
+    }
+    
+    return NULL;
+}
 
 int sm_persistence_save(const char* filename)
 {
@@ -114,9 +149,43 @@ const char* sm_persistence_get_default_path(void)
 
 void sm_persistence_enable_autosave(int interval_sec)
 {
+    pthread_mutex_lock(&autosave_mutex);
+    
+    if (autosave_running) {
+        pthread_mutex_unlock(&autosave_mutex);
+        sm_log(SM_LOG_INFO, "persistence: autosave already running");
+        return;
+    }
+    
+    if (interval_sec <= 0) interval_sec = 60;
+    autosave_interval = interval_sec;
+    autosave_running = 1;
+    
+    pthread_mutex_unlock(&autosave_mutex);
+    
+    /* Create the background autosave thread */
+    if (pthread_create(&autosave_thread, NULL, autosave_worker, NULL) < 0) {
+        sm_log(SM_LOG_ERROR, "persistence: failed to create autosave thread");
+        pthread_mutex_lock(&autosave_mutex);
+        autosave_running = 0;
+        pthread_mutex_unlock(&autosave_mutex);
+        return;
+    }
+    
     sm_log(SM_LOG_INFO, "persistence: autosave enabled (interval=%ds)", interval_sec);
 }
 
 void sm_persistence_cleanup(void)
 {
+    /* Signal autosave thread to stop */
+    pthread_mutex_lock(&autosave_mutex);
+    autosave_running = 0;
+    pthread_mutex_unlock(&autosave_mutex);
+    
+    /* Wait for the thread to finish (with timeout) */
+    if (autosave_thread > 0) {
+        void* result;
+        pthread_join(autosave_thread, &result);
+        autosave_thread = 0;
+    }
 }

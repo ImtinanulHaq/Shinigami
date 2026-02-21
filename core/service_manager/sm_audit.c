@@ -75,20 +75,84 @@ int sm_audit_init(void)
     return 0;
 }
 
+/*
+ * Escape special characters in audit log fields to prevent log injection.
+ * Pipe-delimited format is sensitive to | and newline characters.
+ */
+static void escape_audit_field(const char* input, char* output, size_t outlen)
+{
+    if (!input || !output || outlen < 2) {
+        if (output && outlen > 0) output[0] = '\0';
+        return;
+    }
+    
+    size_t in_i = 0, out_i = 0;
+    while (input[in_i] && out_i < outlen - 1) {
+        unsigned char c = (unsigned char)input[in_i];
+        
+        /* Replace special characters with safe alternatives */
+        if (c == '|') {
+            if (out_i + 1 < outlen - 1) {
+                output[out_i++] = '\\';
+                output[out_i++] = 'p';
+            } else {
+                break;
+            }
+        } else if (c == '\n') {
+            if (out_i + 1 < outlen - 1) {
+                output[out_i++] = '\\';
+                output[out_i++] = 'n';
+            } else {
+                break;
+            }
+        } else if (c == '\r') {
+            if (out_i + 1 < outlen - 1) {
+                output[out_i++] = '\\';
+                output[out_i++] = 'r';
+            } else {
+                break;
+            }
+        } else if (c == '\\') {
+            if (out_i + 1 < outlen - 1) {
+                output[out_i++] = '\\';
+                output[out_i++] = '\\';
+            } else {
+                break;
+            }
+        } else if (c < 32) {
+            /* Replace other control characters with '?' */
+            output[out_i++] = '?';
+        } else {
+            output[out_i++] = (char)c;
+        }
+        
+        in_i++;
+    }
+    
+    output[out_i] = '\0';
+}
+
 void sm_audit_log(audit_action_t action, const char* service,
                   pid_t svc_pid, pid_t actor_pid, uid_t uid,
                   int result, const char* details)
 {
     if (audit_fd < 0) return;
     
+    /* Escape special characters to prevent log injection */
+    char escaped_service[128] = "";
+    char escaped_details[256] = "";
+    
+    escape_audit_field(service, escaped_service, sizeof(escaped_service));
+    escape_audit_field(details, escaped_details, sizeof(escaped_details));
+    
     char buf[512];
     time_t now = time(NULL);
     
     snprintf(buf, sizeof(buf),
              "%ld|%s|%s|%d|%d|%d|%d|%s\n",
-             now, action_name(action), service ? service : "", 
+             now, action_name(action), escaped_service, 
              (int)svc_pid, (int)actor_pid, (int)uid, result,
-             details ? details : "");
+             escaped_details);
     
     pthread_mutex_lock(&audit_mutex);
     audit_rotate_if_needed();

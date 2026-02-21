@@ -105,7 +105,8 @@ int sm_connpool_get(void)
                 g_pool.fds[i] = -1;
                 g_pool.available--;
                 g_pool.in_use++;
-                break;
+                pthread_mutex_unlock(&g_pool.mutex);
+                return fd;  /* Connection returned successfully */
             } else {
                 /* Connection is dead, close and remove from pool */
                 close(g_pool.fds[i]);
@@ -115,16 +116,21 @@ int sm_connpool_get(void)
         }
     }
     
+    /* No pooled connection available; account for new connection about to be created */
+    /* (Done under lock to maintain consistency) */
+    g_pool.in_use++;
+    
     pthread_mutex_unlock(&g_pool.mutex);
     
-    /* If no pooled connection available, create new one */
+    /* Create new connection outside the lock (non-blocking operation) */
+    fd = create_connection();
+    
     if (fd < 0) {
-        fd = create_connection();
-        if (fd >= 0) {
-            pthread_mutex_lock(&g_pool.mutex);
-            g_pool.in_use++;
-            pthread_mutex_unlock(&g_pool.mutex);
-        }
+        /* Creation failed, undo the in_use increment */
+        pthread_mutex_lock(&g_pool.mutex);
+        g_pool.in_use--;
+        pthread_mutex_unlock(&g_pool.mutex);
+        return -1;
     }
     
     return fd;
@@ -147,10 +153,11 @@ void sm_connpool_put(int fd)
         }
     }
     
+    /* Pool is full, must decrement in_use under lock before closing */
     g_pool.in_use--;
     pthread_mutex_unlock(&g_pool.mutex);
     
-    /* Pool is full, just close it */
+    /* Close connection outside the lock */
     close(fd);
 }
 

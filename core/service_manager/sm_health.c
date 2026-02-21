@@ -12,6 +12,8 @@
 
 #include "sm_health.h"
 #include "sm_logging.h"
+#include "sm_dependencies.h"
+#include "sm_service_tier.h"
 
 #include <time.h>
 #include <signal.h>
@@ -44,6 +46,22 @@ void sm_health_check(void)
                        "health: '%s' heartbeat timeout (%lds) pid=%d - marking crashed",
                        name, (long)age, (int)services[i].pid);
                 sm_registry_update_status(name, SERVICE_CRASHED);
+                
+                /* Mark all dependents as crashed when their dependency fails */
+                service_entry_t* all_services = NULL;
+                int all_count = 0;
+                if (sm_registry_get_all(&all_services, &all_count) >= 0) {
+                    for (int j = 0; j < all_count; j++) {
+                        if (sm_deps_depends_on(all_services[j].name, name)) {
+                            sm_log(SM_LOG_WARN,
+                                   "health: dependent '%s' crashed due to '%s' failure",
+                                   all_services[j].name, name);
+                            sm_registry_update_status(all_services[j].name, SERVICE_CRASHED);
+                        }
+                    }
+                    sm_registry_free_copy(all_services);
+                }
+                
                 /* Re-read status for the restart logic below */
                 services[i].status = SERVICE_CRASHED;
             }
@@ -54,13 +72,25 @@ void sm_health_check(void)
             int    restart_count = services[i].restart_count;
             time_t since_crash   = now - services[i].last_crash_time;
 
-            /* Exponential backoff: 2, 4, 8 ... seconds, capped at 120 */
+            /* Use tier-based restart delay instead of simple exponential backoff */
             int backoff = SM_HEALTH_RESTART_DELAY;
-            if (restart_count > 1) {
-                int shift = restart_count - 1;
-                if (shift > 6) shift = 6;   /* cap shift to avoid overflow */
-                backoff = SM_HEALTH_RESTART_DELAY * (1 << shift);
-                if (backoff > 120) backoff = 120;
+            
+            /* Get tier-specific delay if available */
+            service_tier_t tier = SVC_TIER_NORMAL;  /* default */
+            int tier_delay = sm_tier_get_restart_delay(tier, restart_count);
+            if (tier_delay > 0) {
+                backoff = tier_delay / 1000;  /* Convert from ms to seconds */
+            }
+            
+            /* Apply exponential backoff as fallback if tier function not available */
+            if (backoff <= 0) {
+                backoff = SM_HEALTH_RESTART_DELAY;
+                if (restart_count > 1) {
+                    int shift = restart_count - 1;
+                    if (shift > 6) shift = 6;   /* cap shift to avoid overflow */
+                    backoff = backoff * (1 << shift);
+                    if (backoff > 120) backoff = 120;
+                }
             }
 
             if (restart_count >= SM_HEALTH_MAX_RESTARTS) {

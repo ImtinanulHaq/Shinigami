@@ -42,6 +42,7 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/epoll.h>
+#include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/random.h>
@@ -168,24 +169,20 @@ static void threadpool_shutdown(void)
 /* ── SIGNAL HANDLING ────────────────────────────────────────────────────────── */
 
 static volatile int            running         = 1;
-static volatile sig_atomic_t   sighup_received = 0;
-
-static void handle_sigterm(int sig) { (void)sig; running = 0; }
-static void handle_sighup(int sig)  { (void)sig; sighup_received = 1; }
 
 static void setup_signals(void)
 {
-    struct sigaction sa;
-
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = handle_sigterm;
-    sigaction(SIGTERM, &sa, NULL);
-    sigaction(SIGINT,  &sa, NULL);
-
-    sa.sa_handler = handle_sighup;
-    sigaction(SIGHUP, &sa, NULL);
-
-    signal(SIGPIPE, SIG_IGN);
+    sigset_t set;
+    
+    /* Block SIGTERM, SIGHUP, and SIGPIPE - handle via signalfd */
+    sigemptyset(&set);
+    sigaddset(&set, SIGTERM);
+    sigaddset(&set, SIGHUP);
+    sigaddset(&set, SIGPIPE);
+    
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
+    
+    /* Signal handlers are no longer needed - signalfd will handle signals */
 }
 
 /* ── CLEANUP ────────────────────────────────────────────────────────────────── */
@@ -320,6 +317,20 @@ int sm_run(void)
         return -1;
     }
 
+    /* Create signalfd for signal-safe event handling */
+    sigset_t sigset;
+    sigemptyset(&sigset);
+    sigaddset(&sigset, SIGTERM);
+    sigaddset(&sigset, SIGHUP);
+    
+    int signal_fd = signalfd(-1, &sigset, SFD_CLOEXEC | SFD_NONBLOCK);
+    if (signal_fd < 0) {
+        sm_log(SM_LOG_ERROR, "main: signalfd failed: %m");
+        close(epoll_fd);
+        cleanup();
+        return -1;
+    }
+
     server_fd = sm_socket_get_fd();
     memset(&ev, 0, sizeof(ev));
     ev.events  = EPOLLIN;
@@ -327,6 +338,20 @@ int sm_run(void)
 
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_fd, &ev) < 0) {
         sm_log(SM_LOG_ERROR, "main: epoll_ctl ADD failed: %m");
+        close(signal_fd);
+        close(epoll_fd);
+        cleanup();
+        return -1;
+    }
+
+    /* Add signal_fd to epoll for signal-safe event handling */
+    memset(&ev, 0, sizeof(ev));
+    ev.events  = EPOLLIN;
+    ev.data.fd = signal_fd;
+    
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, signal_fd, &ev) < 0) {
+        sm_log(SM_LOG_ERROR, "main: epoll_ctl ADD signal_fd failed: %m");
+        close(signal_fd);
         close(epoll_fd);
         cleanup();
         return -1;
@@ -341,10 +366,6 @@ int sm_run(void)
 
         if (n < 0) {
             if (errno == EINTR) {
-                if (sighup_received) {
-                    sighup_received = 0;
-                    sm_log(SM_LOG_INFO, "main: SIGHUP received");
-                }
                 continue;
             }
             sm_log(SM_LOG_ERROR, "main: epoll_wait failed: %m");
@@ -352,6 +373,30 @@ int sm_run(void)
         }
 
         for (int i = 0; i < n; i++) {
+            /* Handle signals via signalfd */
+            if (events[i].data.fd == signal_fd) {
+                struct signalfd_siginfo sinfo;
+                ssize_t s = read(signal_fd, &sinfo, sizeof(sinfo));
+                
+                if (s == sizeof(sinfo)) {
+                    if (sinfo.ssi_signo == SIGTERM) {
+                        sm_log(SM_LOG_INFO, "main: SIGTERM received - initiating shutdown");
+                        running = 0;
+                    } else if (sinfo.ssi_signo == SIGHUP) {
+                        sm_log(SM_LOG_INFO, "main: SIGHUP received - reloading config");
+                        
+                        /* Reload configuration file */
+                        const char* config_file = "/etc/servicemanager.conf";
+                        if (sm_config_load(config_file) < 0) {
+                            sm_log(SM_LOG_WARN, "main: config reload failed for %s", config_file);
+                        } else {
+                            sm_log(SM_LOG_INFO, "main: config reloaded successfully");
+                        }
+                    }
+                }
+                continue;
+            }
+            
             if (events[i].data.fd != server_fd) continue;
 
             /*
@@ -386,6 +431,7 @@ int sm_run(void)
         }
     }
 
+    close(signal_fd);
     close(epoll_fd);
     cleanup();
 
