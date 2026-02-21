@@ -1,62 +1,98 @@
+#define _POSIX_C_SOURCE 200809L
+
+/*
+ * sm_health.c - Periodic health monitor: heartbeat timeouts and restart logic.
+ *
+ * Fixes applied:
+ *   - Services that have exceeded SM_HEALTH_MAX_RESTARTS are transitioned to
+ *     SERVICE_DEAD.  The health check no longer logs for DEAD services, so
+ *     there is no infinite log spam after giving up.
+ *   - sm_registry_free_copy() is called after use of the snapshot copy.
+ */
+
 #include "sm_health.h"
 #include "sm_logging.h"
+
 #include <time.h>
 #include <signal.h>
 #include <unistd.h>
 
-// ── HEALTH CHECK ───────────────────────────────────────────────────────────────
-
 void sm_health_check(void)
 {
-    time_t now = time(NULL);
-    service_entry_t* services;
-    int count;
+    service_entry_t* services = NULL;
+    int              count    = 0;
+    int              i;
+    time_t           now      = time(NULL);
 
-    if (sm_registry_get_all(&services, &count) < 0)
+    if (sm_registry_get_all(&services, &count) < 0 || count == 0) {
+        sm_registry_free_copy(services);
         return;
+    }
 
-    for (int i = 0; i < count; i++) {
-        service_entry_t* s = &services[i];
+    for (i = 0; i < count; i++) {
+        /* Work from a local copy of the name; update status via registry API */
+        const char* name = services[i].name;
 
-        // Check heartbeat timeout
-        if (s->status == SERVICE_RUNNING &&
-            (now - s->last_heartbeat) > SM_HEARTBEAT_TIMEOUT) {
-            sm_log(SM_LOG_WARN, "service '%s' heartbeat timeout (pid=%d)",
-                   s->name, s->pid);
-            sm_registry_update_status(s->name, SERVICE_CRASHED);
+        /* Skip services that have already been given up on */
+        if (services[i].status == SERVICE_DEAD) continue;
+
+        /* Detect heartbeat timeout for running services */
+        if (services[i].status == SERVICE_RUNNING) {
+            time_t age = now - services[i].last_heartbeat;
+            if (age > SM_HEARTBEAT_TIMEOUT) {
+                sm_log(SM_LOG_WARN,
+                       "health: '%s' heartbeat timeout (%lds) pid=%d - marking crashed",
+                       name, (long)age, (int)services[i].pid);
+                sm_registry_update_status(name, SERVICE_CRASHED);
+                /* Re-read status for the restart logic below */
+                services[i].status = SERVICE_CRASHED;
+            }
         }
 
-        // Handle crashed services with exponential backoff
-        if (s->status == SERVICE_CRASHED) {
-            // Calculate backoff delay
-            int backoff_delay = SM_HEALTH_RESTART_DELAY;
-            if (s->restart_count > 1) {
-                backoff_delay = SM_HEALTH_RESTART_DELAY * (1 << (s->restart_count - 1));
-                if (backoff_delay > 120) backoff_delay = 120;  // cap at 2 minutes
+        /* Handle crashed services with exponential backoff restart */
+        if (services[i].status == SERVICE_CRASHED) {
+            int    restart_count = services[i].restart_count;
+            time_t since_crash   = now - services[i].last_crash_time;
+
+            /* Exponential backoff: 2, 4, 8 ... seconds, capped at 120 */
+            int backoff = SM_HEALTH_RESTART_DELAY;
+            if (restart_count > 1) {
+                int shift = restart_count - 1;
+                if (shift > 6) shift = 6;   /* cap shift to avoid overflow */
+                backoff = SM_HEALTH_RESTART_DELAY * (1 << shift);
+                if (backoff > 120) backoff = 120;
             }
 
-            time_t time_since_crash = now - s->last_crash_time;
-
-            if (s->restart_count >= SM_HEALTH_MAX_RESTARTS) {
+            if (restart_count >= SM_HEALTH_MAX_RESTARTS) {
+                /*
+                 * Transition to DEAD so the health check does not log this
+                 * message on every future iteration.
+                 */
                 sm_log(SM_LOG_ERROR,
-                       "service '%s' exceeded max restarts (%d), giving up",
-                       s->name, SM_HEALTH_MAX_RESTARTS);
-            } else if (time_since_crash >= backoff_delay) {
-                sm_log(SM_LOG_INFO,
-                       "restarting service '%s' (restart #%d, was crashed %lds ago)",
-                       s->name, s->restart_count + 1, time_since_crash);
+                       "health: '%s' exceeded max restarts (%d) - marking dead",
+                       name, SM_HEALTH_MAX_RESTARTS);
+                sm_registry_update_status(name, SERVICE_DEAD);
 
-                // Try to kill old process
-                if (s->pid > 0) {
-                    kill(s->pid, SIGKILL);
+            } else if (since_crash >= (time_t)backoff) {
+                sm_log(SM_LOG_INFO,
+                       "health: restarting '%s' attempt %d/%d (crashed %lds ago, backoff %ds)",
+                       name, restart_count + 1, SM_HEALTH_MAX_RESTARTS,
+                       (long)since_crash, backoff);
+
+                /* Send SIGKILL to ensure the old process is gone */
+                if (services[i].pid > 1) {
+                    kill(services[i].pid, SIGKILL);
                 }
 
-                // Mark as waiting for re-registration
-                // In production, this would trigger a systemd restart or similar
+                /*
+                 * In a full production system this is where a systemd
+                 * restart command or a process supervisor notification
+                 * would be sent.  The service will re-register itself
+                 * when it comes back up.
+                 */
             }
         }
     }
 
-    // Free the copy allocated by sm_registry_get_all()
     sm_registry_free_copy(services);
 }

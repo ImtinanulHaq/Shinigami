@@ -3,36 +3,30 @@
 
 #include <sys/types.h>
 
-// ── SERVICE MANAGER USER/GROUP ────────────────────────────────────────────────
-// Should be created during system setup:
-// addgroup servicemanager
-// adduser servicemanager --ingroup servicemanager --system
-
+/*
+ * System user and group that the service manager runs as after startup.
+ * Create these before first run:
+ *   addgroup --system servicemanager
+ *   adduser  --system --ingroup servicemanager servicemanager
+ */
 #define SM_USERNAME     "servicemanager"
 #define SM_GROUPNAME    "servicemanager"
 
-// ── SECURITY FUNCTIONS ────────────────────────────────────────────────────────
-
-// Drop privileges: set UID/GID after startup
+/* Drop root after socket and key file setup is complete */
 int  sm_drop_privileges(void);
 
-// Set resource limits (prevent DoS)
+/* Apply rlimit constraints to prevent resource exhaustion */
 int  sm_set_resource_limits(void);
 
-// Setup seccomp filter (syscall whitelist)
-// Only allows safe syscalls, blocks execve, ptrace, mount, etc.
+/* Install seccomp-BPF syscall whitelist - call last, after thread pool is started */
 int  sm_setup_seccomp(void);
 
-// Setup filesystem sandbox with chroot
+/* Optional chroot / namespace sandbox (stub - extend as needed) */
 int  sm_setup_sandbox(void);
 
-// Setup Linux capabilities (CAP_KILL, CAP_SYS_RESOURCE)
-// All other capabilities are dropped
-int  sm_setup_capabilities(void);
-
-// Validate peer credentials on socket connection
+/* Read kernel-verified peer credentials from SO_PEERCRED - cannot be spoofed */
 uid_t sm_get_peer_uid(int fd);
 gid_t sm_get_peer_gid(int fd);
 pid_t sm_get_peer_pid(int fd);
 
-#endif // SM_SECURITY_H
+#endif /* SM_SECURITY_H */

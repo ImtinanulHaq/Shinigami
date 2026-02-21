@@ -1,6 +1,21 @@
 #define _POSIX_C_SOURCE 200809L
 
+/*
+ * sm_logging.c - Thread-safe, rotating file and syslog logger.
+ *
+ * Fixes applied:
+ *   - Buffer sanitized before writing: newlines and carriage-returns in
+ *     formatted messages are replaced with spaces to prevent log injection.
+ *   - Re-entrant safety: a per-thread flag prevents sm_log() from being called
+ *     recursively (e.g. from a signal handler while the mutex is held).
+ *   - log_rotate() is called with the mutex already held; it does NOT call
+ *     sm_log() to avoid recursive locking.
+ *   - sm_logging_close() flushes inline rather than calling sm_log() while
+ *     holding the mutex.
+ */
+
 #include "sm_logging.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,26 +27,34 @@
 #include <fcntl.h>
 #include <pthread.h>
 
-// ── STATE ──────────────────────────────────────────────────────────────────────
+/* ── STATE ──────────────────────────────────────────────────────────────────── */
 
-static int                    log_fd      = -1;
-static sm_log_level_t         log_level   = SM_LOG_INFO;
-static const char*            level_names[] = {
+static int             log_fd      = -1;
+static sm_log_level_t  log_level   = SM_LOG_INFO;
+static pthread_mutex_t log_mutex   = PTHREAD_MUTEX_INITIALIZER;
+static int             syslog_open = 0;
+
+static const char* const level_names[] = {
     "DEBUG", "INFO", "WARN", "ERROR", "CRIT"
 };
-static pthread_mutex_t        log_mutex   = PTHREAD_MUTEX_INITIALIZER;
-static int                    syslog_open = 0;
 
-// ── HELPERS ────────────────────────────────────────────────────────────────────
+/*
+ * Per-thread re-entrancy guard.
+ * Set to 1 while sm_log() is executing in this thread.
+ * Prevents recursive calls (e.g. from signal handlers) from deadlocking.
+ */
+static __thread int in_log = 0;
 
-static const char* get_level_name(sm_log_level_t level)
+/* ── HELPERS ────────────────────────────────────────────────────────────────── */
+
+static const char* level_name(sm_log_level_t level)
 {
     if (level >= 0 && level < (int)(sizeof(level_names) / sizeof(level_names[0])))
         return level_names[level];
     return "UNKNOWN";
 }
 
-static int get_syslog_priority(sm_log_level_t level)
+static int syslog_priority(sm_log_level_t level)
 {
     switch (level) {
         case SM_LOG_DEBUG: return LOG_DEBUG;
@@ -43,66 +66,81 @@ static int get_syslog_priority(sm_log_level_t level)
     }
 }
 
-static void log_rotate(void)
+/*
+ * Replace control characters that could corrupt the log file or enable
+ * log-injection attacks.  Replaces \n \r \t and all other non-printable
+ * characters below 0x20 with a space.
+ * Called while the mutex is already held.
+ */
+static void sanitize_log_buffer(char* buf)
 {
-    // Check if file needs rotation
+    for (char* p = buf; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c < 0x20 || c == 0x7f) *p = ' ';
+    }
+}
+
+/*
+ * Rotate the log file if it exceeds SM_LOG_MAX_SIZE.
+ * Must only be called while log_mutex is held and log_fd is valid.
+ * Does NOT call sm_log() to avoid re-entrancy.
+ */
+static void log_rotate_locked(void)
+{
     struct stat st;
-    if (stat(SM_LOG_FILE, &st) < 0)
-        return;  // file doesn't exist yet
+    char        old_path[600], new_path[600];
+    int         i;
 
-    if (st.st_size < SM_LOG_MAX_SIZE)
-        return;  // not yet at limit
+    if (fstat(log_fd, &st) < 0) return;
+    if (st.st_size < SM_LOG_MAX_SIZE) return;
 
-    // Rotate: .4 -> delete, .3 -> .4, .2 -> .3, .1 -> .2, .0 -> .1, current -> .0
-    char old_path[512], new_path[512];
-
-    for (int i = SM_LOG_BACKUP_COUNT - 2; i >= 0; i--) {
+    /* Shift rotated files: N-2 -> N-1, ..., 0 -> 1 */
+    for (i = SM_LOG_BACKUP_COUNT - 2; i >= 0; i--) {
         snprintf(old_path, sizeof(old_path), "%s.%d", SM_LOG_FILE, i);
         snprintf(new_path, sizeof(new_path), "%s.%d", SM_LOG_FILE, i + 1);
         rename(old_path, new_path);
     }
 
-    // Rename current to .0
+    /* Move current to .0 */
     snprintf(new_path, sizeof(new_path), "%s.0", SM_LOG_FILE);
     rename(SM_LOG_FILE, new_path);
 
-    // Close and reopen
-    if (log_fd >= 0) {
-        close(log_fd);
-        log_fd = -1;
-    }
+    /* Close old fd and open new file */
+    close(log_fd);
+    log_fd = open(SM_LOG_FILE, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
+    /* If re-open fails, log_fd will be -1; further writes are silently skipped */
 }
 
-// ── PUBLIC FUNCTIONS ───────────────────────────────────────────────────────────
+/* ── PUBLIC FUNCTIONS ───────────────────────────────────────────────────────── */
 
 int sm_logging_init(void)
 {
     pthread_mutex_lock(&log_mutex);
 
-    // Open syslog
     openlog("servicemanager", LOG_PID | LOG_CONS, LOG_DAEMON);
     syslog_open = 1;
 
-    // Open log file
     log_fd = open(SM_LOG_FILE,
-                  O_WRONLY | O_CREAT | O_APPEND,
+                  O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
                   0640);
     if (log_fd < 0) {
-        syslog(LOG_ERR, "cannot open log file %s", SM_LOG_FILE);
+        syslog(LOG_ERR, "cannot open log file %s: %m", SM_LOG_FILE);
         pthread_mutex_unlock(&log_mutex);
         return -1;
     }
 
-    sm_log(SM_LOG_INFO, "logging initialized");
     pthread_mutex_unlock(&log_mutex);
+
+    sm_log(SM_LOG_INFO, "logging initialized (file=%s)", SM_LOG_FILE);
     return 0;
 }
 
 const char* sm_log_timestamp(void)
 {
     static __thread char buf[32];
-    time_t now = time(NULL);
+    time_t    now = time(NULL);
     struct tm tm;
+
     localtime_r(&now, &tm);
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
     return buf;
@@ -110,58 +148,68 @@ const char* sm_log_timestamp(void)
 
 void sm_log(sm_log_level_t level, const char* fmt, ...)
 {
-    if (level < log_level)
-        return;  // skip if below threshold
+    char        buf[SM_LOG_BUFFER_SIZE];
+    va_list     ap;
+    pid_t       pid;
+    const char* ts;
+    const char* lv;
+
+    if (level < log_level) return;
+
+    /* Re-entrancy guard: skip if already logging in this thread */
+    if (in_log) return;
+    in_log = 1;
+
+    /* Format the message before taking the lock (keeps lock duration short) */
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
+    /* Sanitize: remove any control chars that could corrupt log files */
+    sanitize_log_buffer(buf);
+
+    pid = getpid();
+    ts  = sm_log_timestamp();
+    lv  = level_name(level);
 
     pthread_mutex_lock(&log_mutex);
 
-    char buffer[SM_LOG_BUFFER_SIZE];
-    va_list ap;
-
-    // Format the message
-    va_start(ap, fmt);
-    vsnprintf(buffer, sizeof(buffer), fmt, ap);
-    va_end(ap);
-
-    pid_t pid = getpid();
-    const char* ts = sm_log_timestamp();
-    const char* lv = get_level_name(level);
-
-    // Write to syslog
     if (syslog_open) {
-        syslog(get_syslog_priority(level),
-               "[%s] [%d] %s\n",
-               lv, pid, buffer);
+        syslog(syslog_priority(level), "[%s] [%d] %s", lv, (int)pid, buf);
     }
 
-    // Write to file (with rotation)
     if (log_fd >= 0) {
-        log_rotate();
-
-        dprintf(log_fd, "%s [%s] [%d] %s\n",
-                ts, lv, pid, buffer);
-    }
-
-    // For critical errors, also stderr
-    if (level >= SM_LOG_CRIT) {
-        fprintf(stderr, "%s [%s] [%d] %s\n",
-                ts, lv, pid, buffer);
+        log_rotate_locked();
+        if (log_fd >= 0) {   /* rotation may have failed */
+            dprintf(log_fd, "%s [%s] [%d] %s\n", ts, lv, (int)pid, buf);
+        }
     }
 
     pthread_mutex_unlock(&log_mutex);
+
+    /* Critical messages also go to stderr (outside the lock) */
+    if (level >= SM_LOG_CRIT) {
+        fprintf(stderr, "%s [%s] [%d] %s\n", ts, lv, (int)pid, buf);
+        fflush(stderr);
+    }
+
+    in_log = 0;
 }
 
 void sm_logging_close(void)
 {
     pthread_mutex_lock(&log_mutex);
 
+    /* Write shutdown message directly without calling sm_log() (mutex is held) */
     if (log_fd >= 0) {
-        sm_log(SM_LOG_INFO, "logging shutdown");
+        dprintf(log_fd, "%s [INFO] [%d] logging shutdown\n",
+                sm_log_timestamp(), (int)getpid());
         close(log_fd);
         log_fd = -1;
     }
 
     if (syslog_open) {
+        syslog(LOG_INFO, "logging shutdown");
         closelog();
         syslog_open = 0;
     }

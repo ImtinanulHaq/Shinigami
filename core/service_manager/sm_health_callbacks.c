@@ -1,0 +1,106 @@
+#define _POSIX_C_SOURCE 200809L
+
+/*
+ * sm_health_callbacks.c - Custom health check registration
+ */
+
+#include "sm_health_callbacks.h"
+#include "sm_logging.h"
+#include <string.h>
+#include <stdlib.h>
+#include <pthread.h>
+
+#define MAX_CALLBACKS 32
+
+static struct {
+    char service_name[64];
+    sm_health_check_fn fn;
+} g_callbacks[MAX_CALLBACKS];
+
+static int g_callback_count = 0;
+static pthread_mutex_t cb_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+int sm_health_callback_register(const char* service_name, sm_health_check_fn fn)
+{
+    if (!service_name || !fn) return -1;
+    
+    pthread_mutex_lock(&cb_mutex);
+    
+    if (g_callback_count >= MAX_CALLBACKS) {
+        pthread_mutex_unlock(&cb_mutex);
+        return -1;
+    }
+    
+    strncpy(g_callbacks[g_callback_count].service_name, service_name, 63);
+    g_callbacks[g_callback_count].fn = fn;
+    g_callback_count++;
+    
+    pthread_mutex_unlock(&cb_mutex);
+    
+    sm_log(SM_LOG_INFO, "health: registered callback for '%s'", service_name);
+    return 0;
+}
+
+int sm_health_callback_check(const char* service_name)
+{
+    if (!service_name) return -1;
+    
+    pthread_mutex_lock(&cb_mutex);
+    
+    for (int i = 0; i < g_callback_count; i++) {
+        if (!strcmp(g_callbacks[i].service_name, service_name)) {
+            int result = g_callbacks[i].fn(service_name);
+            pthread_mutex_unlock(&cb_mutex);
+            return result;
+        }
+    }
+    
+    pthread_mutex_unlock(&cb_mutex);
+    return 0;  /* no callback, assume healthy */
+}
+
+void sm_health_callbacks_check_all(void)
+{
+    pthread_mutex_lock(&cb_mutex);
+    
+    for (int i = 0; i < g_callback_count; i++) {
+        if (g_callbacks[i].fn) {
+            int result = g_callbacks[i].fn(g_callbacks[i].service_name);
+            if (result < 0) {
+                sm_log(SM_LOG_WARN, "health: callback failed for '%s'",
+                       g_callbacks[i].service_name);
+            }
+        }
+    }
+    
+    pthread_mutex_unlock(&cb_mutex);
+}
+
+int sm_health_callback_unregister(const char* service_name)
+{
+    if (!service_name) return -1;
+    
+    pthread_mutex_lock(&cb_mutex);
+    
+    for (int i = 0; i < g_callback_count; i++) {
+        if (!strcmp(g_callbacks[i].service_name, service_name)) {
+            for (int j = i; j < g_callback_count - 1; j++) {
+                g_callbacks[j] = g_callbacks[j + 1];
+            }
+            g_callback_count--;
+            pthread_mutex_unlock(&cb_mutex);
+            return 0;
+        }
+    }
+    
+    pthread_mutex_unlock(&cb_mutex);
+    return -1;
+}
+
+void sm_health_callbacks_cleanup(void)
+{
+    pthread_mutex_lock(&cb_mutex);
+    memset(g_callbacks, 0, sizeof(g_callbacks));
+    g_callback_count = 0;
+    pthread_mutex_unlock(&cb_mutex);
+}

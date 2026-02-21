@@ -1,25 +1,36 @@
 #ifndef SM_RATE_LIMIT_H
 #define SM_RATE_LIMIT_H
 
+/*
+ * sm_rate_limit.h - Per-PID and global token-bucket rate limiting.
+ *
+ * Token bucket provides smooth rate limiting without the boundary-burst
+ * problem of fixed-window counters.  A bucket starts full; each request
+ * consumes one token; tokens refill at a fixed rate up to the bucket capacity.
+ */
+
 #include <time.h>
 #include <sys/types.h>
 
-// ── RATE LIMIT POLICY ─────────────────────────────────────────────────────────
+/* Per-PID bucket: capacity and refill rate */
+#define SM_RATE_PID_CAPACITY   10       /* max burst per PID */
+#define SM_RATE_PID_REFILL     10.0     /* tokens per second per PID */
 
-#define SM_RATE_LIMIT_WINDOW    1       // time window in seconds
-#define SM_RATE_LIMIT_PER_PID   10      // max requests per PID per window
-#define SM_RATE_LIMIT_GLOBAL    50      // max total requests per window
+/* Global bucket: caps total throughput regardless of PID count */
+#define SM_RATE_GLOBAL_CAPACITY 50      /* max global burst */
+#define SM_RATE_GLOBAL_REFILL   50.0    /* tokens per second globally */
 
-// ── FUNCTIONS ──────────────────────────────────────────────────────────────────
+/* Maximum number of PID entries tracked simultaneously */
+#define SM_RATE_TABLE_SIZE     256
 
-// Initialize rate limiting
 int  sm_rate_limit_init(void);
 
-// Check if PID exceeded rate limit
-// Returns: 0 = OK, SM_ERR_RATELIMIT = exceeded
+/*
+ * Check and consume one token for the given PID.
+ * Returns SM_OK if allowed, SM_ERR_RATELIMIT if throttled.
+ */
 int  sm_rate_limit_check(pid_t pid);
 
-// Clean up resources
 void sm_rate_limit_cleanup(void);
 
-#endif // SM_RATE_LIMIT_H
+#endif /* SM_RATE_LIMIT_H */
