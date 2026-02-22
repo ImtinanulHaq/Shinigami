@@ -12,12 +12,12 @@ CORE_DIR := ../../core/service_manager
 BUILD_DIR := build
 TESTS_DIR := .
 
-# Source files from core
+# Source files from core - minimal set for fuzz testing
+# (Excludes handlers, health, security as they have complex dependencies)
 CORE_SRCS := $(CORE_DIR)/sm_protocol.c \
              $(CORE_DIR)/sm_registry.c \
              $(CORE_DIR)/sm_crypto.c \
-             $(CORE_DIR)/sm_rate_limit.c \
-             $(CORE_DIR)/sm_handlers.c
+             $(CORE_DIR)/sm_rate_limit.c
 
 # Test files (Unit Tests - Level 2)
 UNIT_TESTS := test_sm_protocol \
@@ -35,6 +35,7 @@ FUZZ_TARGET_UBSAN := $(BUILD_DIR)/fuzz_target_ubsan
 
 .PHONY: all clean test test-unit test-integration test-e2e test-fuzz test-static
 .PHONY: test-asan test-ubsan test-coverage help
+.PHONY: fuzz_target fuzz_target_asan fuzz_target_ubsan
 
 # Default target
 all: $(UNIT_TEST_EXECUTABLES) $(FUZZ_TARGET)
@@ -89,13 +90,18 @@ $(BUILD_DIR)/test_sm_rate_limit: test_sm_rate_limit.c $(CORE_DIR)/sm_rate_limit.
 
 # Fuzz target compilation
 $(FUZZ_TARGET): fuzz_target.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ fuzz_target.c $(CORE_SRCS) $(LDFLAGS) -lssl -lcrypto -DAFL_MAIN
+	$(CC) $(CFLAGS) -DAFL_MAIN -o $@ fuzz_target.c $(CORE_SRCS) $(LDFLAGS) -lssl -lcrypto
 
 $(FUZZ_TARGET_ASAN): fuzz_target.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) -o $@ fuzz_target.c $(CORE_SRCS) $(LDFLAGS) -lssl -lcrypto -DAFL_MAIN
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) -DAFL_MAIN -o $@ fuzz_target.c $(CORE_SRCS) $(LDFLAGS) -lssl -lcrypto
 
 $(FUZZ_TARGET_UBSAN): fuzz_target.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(UBSAN_FLAGS) -o $@ fuzz_target.c $(CORE_SRCS) $(LDFLAGS) -lssl -lcrypto -DAFL_MAIN
+	$(CC) $(CFLAGS) $(UBSAN_FLAGS) -DAFL_MAIN -o $@ fuzz_target.c $(CORE_SRCS) $(LDFLAGS) -lssl -lcrypto
+
+# Phony convenience targets for fuzz
+fuzz_target: $(FUZZ_TARGET)
+fuzz_target_asan: $(FUZZ_TARGET_ASAN)
+fuzz_target_ubsan: $(FUZZ_TARGET_UBSAN)
 
 # Master test runner
 test: all test-unit test-integration test-e2e test-static

@@ -4,14 +4,46 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
 
-/* This is an AFL-compatible fuzzing target that exercises the protocol parser */
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* Mock implementations for functions we don't need to test                     */
+/* ─────────────────────────────────────────────────────────────────────────── */
 
-/* Mock implementations for missing functions (in real scenario, link with actual libs) */
 void sm_log(int level, const char* fmt, ...) {
     /* Suppress logging during fuzzing */
     (void)level;
     (void)fmt;
+}
+
+int sm_ratelimit_check_extended(const char* svc, uint16_t msg_type, int rl_id) {
+    (void)svc;
+    (void)msg_type;
+    (void)rl_id;
+    return 0;
+}
+
+void sm_audit_log(const char* action, const char* svc, int pid, int uid) {
+    (void)action;
+    (void)svc;
+    (void)pid;
+    (void)uid;
+}
+
+uint64_t sm_request_id_generate(void) {
+    return 0;
+}
+
+void sm_request_id_set(uint64_t id) {
+    (void)id;
+}
+
+void sm_request_id_clear(void) {
+}
+
+const char* sm_request_id_str(void) {
+    return "mock-req-id";
 }
 
 /* Fuzz target entry point for AFL */
@@ -59,19 +91,19 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     switch (hdr->type) {
         case SM_MSG_REGISTER: {
             /* Register message payload fuzzing */
-            if (hdr->length < sizeof(sm_msg_register_t)) {
+            if (hdr->length < sizeof(sm_register_req_t)) {
                 break;
             }
             
-            sm_msg_register_t* msg = (sm_msg_register_t*)(fuzz_data + sizeof(sm_hdr_t));
+            sm_register_req_t* msg = (sm_register_req_t*)(fuzz_data + sizeof(sm_hdr_t));
             
-            /* Validate service name length */
-            if (msg->name_len > SM_MAX_NAME) {
+            /* Validate service name is present */
+            if (msg->service_name[0] == '\0') {
                 break;  /* Invalid, but shouldn't crash */
             }
             
-            /* Validate path length */
-            if (msg->path_len > SM_MAX_PATH) {
+            /* Validate path is present */
+            if (msg->socket_path[0] == '\0') {
                 break;
             }
             
@@ -80,14 +112,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         
         case SM_MSG_LOOKUP: {
             /* Lookup message fuzzing */
-            if (hdr->length < sizeof(sm_msg_lookup_t)) {
+            if (hdr->length < sizeof(sm_lookup_req_t)) {
                 break;
             }
             
-            sm_msg_lookup_t* msg = (sm_msg_lookup_t*)(fuzz_data + sizeof(sm_hdr_t));
+            sm_lookup_req_t* msg = (sm_lookup_req_t*)(fuzz_data + sizeof(sm_hdr_t));
             
-            /* Service name should be null-terminated */
-            if (msg->name_len > SM_MAX_NAME) {
+            /* Service name should be present */
+            if (msg->service_name[0] == '\0') {
                 break;
             }
             
@@ -96,7 +128,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         
         case SM_MSG_HEARTBEAT: {
             /* Heartbeat is simple, just validate size */
-            if (hdr->length < sizeof(sm_msg_heartbeat_t)) {
+            if (hdr->length < sizeof(sm_heartbeat_req_t)) {
+                break;
+            }
+            
+            sm_heartbeat_req_t* msg = (sm_heartbeat_req_t*)(fuzz_data + sizeof(sm_hdr_t));
+            if (msg->service_name[0] == '\0') {
                 break;
             }
             
@@ -105,14 +142,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         
         case SM_MSG_UNREGISTER: {
             /* Unregister message fuzzing */
-            if (hdr->length < sizeof(sm_msg_unregister_t)) {
+            if (hdr->length < sizeof(sm_unregister_req_t)) {
                 break;
             }
             
-            sm_msg_unregister_t* msg = (sm_msg_unregister_t*)(fuzz_data + sizeof(sm_hdr_t));
+            sm_unregister_req_t* msg = (sm_unregister_req_t*)(fuzz_data + sizeof(sm_hdr_t));
             
             /* Service name validation */
-            if (msg->name_len > SM_MAX_NAME) {
+            if (msg->service_name[0] == '\0') {
                 break;
             }
             
@@ -130,6 +167,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 /* AFL-compatible main for standalone binary */
 #ifdef AFL_MAIN
 int main(int argc, char** argv) {
+    (void)argc;   /* suppress unused parameter warning */
+    (void)argv;   /* suppress unused parameter warning */
+    
     #ifdef __AFL_HAVE_MANUAL_CONTROL
     __AFL_INIT();
     #endif

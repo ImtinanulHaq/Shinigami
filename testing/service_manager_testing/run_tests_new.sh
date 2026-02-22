@@ -2,7 +2,8 @@
 # Service Manager Comprehensive Test Harness (Levels 1-5)
 # Professional production-grade testing framework
 
-set -e
+# Don't use set -e because we need to handle test failures gracefully
+# Instead, we explicitly check exit codes in tests
 
 # Colors
 GREEN='\033[0;32m'
@@ -158,19 +159,19 @@ run_level_5_fuzz() {
         log_level "5" "Building fuzz targets"
         
         # Build standard fuzz target
-        if make fuzz_target 2>&1 >/dev/null; then
+        if make fuzz_target >/dev/null 2>&1; then
             ((passed++))
             log_pass "Standard fuzz target built"
         fi
         
         # Build ASAN instrumented fuzz target
-        if make fuzz_target_asan 2>&1 >/dev/null; then
+        if make fuzz_target_asan >/dev/null 2>&1; then
             ((passed++))
             log_pass "ASAN instrumented fuzz target built"
         fi
         
         # Build UBSAN instrumented fuzz target
-        if make fuzz_target_ubsan 2>&1 >/dev/null; then
+        if make fuzz_target_ubsan >/dev/null 2>&1; then
             ((passed++))
             log_pass "UBSAN instrumented fuzz target built"
         fi
