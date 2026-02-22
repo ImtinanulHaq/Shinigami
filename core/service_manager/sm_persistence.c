@@ -30,7 +30,7 @@ static void* autosave_worker(void* arg)
     
     while (1) {
         /* Sleep for the configured interval */
-        sleep(autosave_interval);
+        sleep((unsigned int)autosave_interval);
         
         /* Check if we should still be running */
         pthread_mutex_lock(&autosave_mutex);

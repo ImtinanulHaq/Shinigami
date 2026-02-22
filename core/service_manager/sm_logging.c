@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <errno.h>
 
 /* ── STATE ──────────────────────────────────────────────────────────────────── */
 
@@ -124,7 +125,7 @@ int sm_logging_init(void)
                   O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
                   0640);
     if (log_fd < 0) {
-        syslog(LOG_ERR, "cannot open log file %s: %m", SM_LOG_FILE);
+        syslog(LOG_ERR, "cannot open log file %s: %s", SM_LOG_FILE, strerror(errno));
         pthread_mutex_unlock(&log_mutex);
         return -1;
     }

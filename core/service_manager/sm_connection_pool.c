@@ -31,7 +31,7 @@ int sm_connpool_init(int max_conns)
 {
     if (max_conns <= 0) max_conns = 10;
     
-    g_pool.fds = malloc(max_conns * sizeof(int));
+    g_pool.fds = malloc((size_t)max_conns * sizeof(int));
     if (!g_pool.fds) return -1;
     
     for (int i = 0; i < max_conns; i++) {

@@ -27,6 +27,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <ctype.h>
+#include <errno.h>
 
 #define MAX_HTTP_HEADER_SIZE 4096
 #define MAX_MGMT_ENDPOINTS 10
@@ -61,12 +62,12 @@ static int parse_http_request(const char* raw_data, int len, http_request_t* req
     const char* first_line_end = strchr(raw_data, '\n');
     if (!first_line_end) return -1;
     
-    int first_line_len = first_line_end - raw_data;
+    int first_line_len = (int)(first_line_end - raw_data);
     if (first_line_len > 512) return -1;
     
     /* Parse request line: METHOD PATH HTTP/1.x */
     char request_line[512];
-    strncpy(request_line, raw_data, first_line_len);
+    strncpy(request_line, raw_data, (size_t)first_line_len);
     request_line[first_line_len] = '\0';
     
     /* Remove trailing \r if present */
@@ -89,7 +90,7 @@ static int parse_http_request(const char* raw_data, int len, http_request_t* req
         const char* line_end = strchr(current, '\n');
         if (!line_end) break;
         
-        int line_len = line_end - current;
+        int line_len = (int)(line_end - current);
         if (line_len < 2) {
             current = line_end + 1;
             continue;
@@ -102,9 +103,9 @@ static int parse_http_request(const char* raw_data, int len, http_request_t* req
         if (strncasecmp(current, "Authorization:", 14) == 0) {
             const char* value_start = current + 14;
             while (*value_start && isspace(*value_start)) value_start++;
-            int value_len = line_len - (value_start - current);
+            int value_len = (int)(line_len - (value_start - current));
             if (value_len > 0 && value_len < 255) {
-                strncpy(req->auth_header, value_start, value_len);
+                strncpy(req->auth_header, value_start, (size_t)value_len);
                 req->auth_header[value_len] = '\0';
             }
         }
@@ -127,8 +128,8 @@ static int hex_to_bytes(const char* hex_str, uint8_t* out, int max_len)
 {
     if (!hex_str || !out || max_len < 1) return -1;
     
-    int len = strlen(hex_str);
-    if (len % 2 != 0 || len / 2 > max_len) return -1;
+    int len = (int)strlen(hex_str);
+    if (len % 2 != 0 || len / 2 > (int)max_len) return -1;
     
     for (int i = 0; i < len; i += 2) {
         if (sscanf(hex_str + i, "%2hhx", &out[i / 2]) != 1) {
@@ -163,23 +164,25 @@ static int verify_request_auth(http_request_t* req, const char* body)
     
     /* Reconstruct authenticated data: METHOD|PATH|BODY */
     const char* body_to_sign = body ? body : "";
-    int body_len = body ? strlen(body) : 0;
+    int body_len = body ? (int)strlen(body) : 0;
     
-    int auth_data_len = strlen(req->method) + 1 + strlen(req->path) + 1 + body_len;
-    uint8_t* auth_data = malloc(auth_data_len);
+    size_t method_len = strlen(req->method);
+    size_t path_len = strlen(req->path);
+    int auth_data_len = (int)(method_len + 1 + path_len + 1 + (size_t)body_len);
+    uint8_t* auth_data = malloc((size_t)auth_data_len);
     if (!auth_data) return -1;
     
     int pos = 0;
     strcpy((char*)auth_data + pos, req->method);
-    pos += strlen(req->method) + 1;
+    pos += (int)method_len + 1;
     *(auth_data + pos - 1) = '|';
     
     strcpy((char*)auth_data + pos, req->path);
-    pos += strlen(req->path) + 1;
+    pos += (int)path_len + 1;
     *(auth_data + pos - 1) = '|';
     
     if (body_len > 0) {
-        memcpy(auth_data + pos, body_to_sign, body_len);
+        memcpy(auth_data + pos, body_to_sign, (size_t)body_len);
     }
     
     /* Get the key and verify HMAC */
@@ -191,7 +194,7 @@ static int verify_request_auth(http_request_t* req, const char* body)
     }
     
     int result = sm_hmac_verify(key, SM_HMAC_KEY_SIZE,
-                                auth_data, auth_data_len,
+                                auth_data, (size_t)auth_data_len,
                                 expected_digest);
     
     free(auth_data);
@@ -211,7 +214,7 @@ static int handle_status(http_request_t* req, char* response_body, int max_len)
     
     sm_metrics_t metrics = sm_metrics_get();
     
-    snprintf(response_body, max_len,
+    snprintf(response_body, (size_t)max_len,
              "{\"status\":\"running\",\"requests\":%lu,\"errors\":%lu,\"ratelimit_hits\":%lu,"
              "\"avg_latency_us\":%lu,\"peak_qps\":%lu}",
              metrics.total_requests,
@@ -230,7 +233,7 @@ static int handle_metrics(http_request_t* req, char* response_body, int max_len)
     
     sm_metrics_t metrics = sm_metrics_get();
     
-    snprintf(response_body, max_len,
+    snprintf(response_body, (size_t)max_len,
              "{\"total_requests\":%lu,\"register\":%lu,\"lookup\":%lu,\"heartbeat\":%lu,"
              "\"unregister\":%lu,\"errors\":%lu,\"auth_failures\":%lu,\"ratelimit_hits\":%lu}",
              metrics.total_requests,
@@ -254,11 +257,11 @@ static int handle_services(http_request_t* req, char* response_body, int max_len
     int count = 0;
     
     if (sm_registry_get_all(&services, &count) < 0) {
-        snprintf(response_body, max_len, "{\"error\":\"failed to get services\"}");
+        snprintf(response_body, (size_t)max_len, "{\"error\":\"failed to get services\"}");
         return 500;
     }
     
-    int pos = snprintf(response_body, max_len, "{\"services\":[");
+    int pos = snprintf(response_body, (size_t)max_len, "{\"services\":[");
     if (pos < 0) pos = 0;
     
     /* Each service entry needs ~80+ bytes minimum; cap services to avoid buffer overflow */
@@ -269,24 +272,24 @@ static int handle_services(http_request_t* req, char* response_body, int max_len
         /* Check if we have enough space for one more entry (~100 bytes) */
         if (pos >= max_len - 100) {
             /* Truncate and add indicator */
-            pos = snprintf(response_body + pos, max_len - pos, "{\"name\":\"...(truncated)\"}");
+            pos = snprintf(response_body + pos, (size_t)(max_len - pos), "{\"name\":\"...(truncated)\"}");
             break;
         }
         
         if (i > 0) {
-            int n = snprintf(response_body + pos, max_len - pos, ",");
+            int n = snprintf(response_body + pos, (size_t)(max_len - pos), ",");
             if (n < 0) break;
             pos += n;
         }
         
-        int n = snprintf(response_body + pos, max_len - pos,
+        int n = snprintf(response_body + pos, (size_t)(max_len - pos),
                         "{\"name\":\"%s\",\"pid\":%d,\"status\":%d}",
                         services[i].name, (int)services[i].pid, services[i].status);
         if (n < 0) break;
         pos += n;
     }
     
-    snprintf(response_body + pos, max_len - pos, "]}");
+    snprintf(response_body + pos, (size_t)(max_len - pos), "}]");
     sm_registry_free_copy(services);
     
     return 200;
@@ -312,7 +315,7 @@ static void send_http_response(int client_fd, int status_code, const char* body)
     else if (status_code == 405) status_text = "405 Method Not Allowed";
     else if (status_code == 500) status_text = "500 Internal Server Error";
     
-    int body_len = body ? strlen(body) : 0;
+    int body_len = body ? (int)strlen(body) : 0;
     
     char response[4096];
     snprintf(response, sizeof(response),
@@ -337,7 +340,7 @@ static void process_management_request(int client_fd)
     
     /* Parse HTTP request */
     http_request_t req;
-    if (parse_http_request(buf, n, &req) < 0) {
+    if (parse_http_request(buf, (int)n, &req) < 0) {
         send_http_response(client_fd, 400, "{\"error\":\"malformed request\"}");
         return;
     }
@@ -381,7 +384,7 @@ static void* management_worker(void* arg)
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    server_addr.sin_port = htons(port);
+    server_addr.sin_port = htons((uint16_t)port);
     
     mgmt_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (mgmt_fd < 0) {

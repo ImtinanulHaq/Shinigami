@@ -55,7 +55,7 @@ static int set_socket_timeout(int fd)
 
     if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0 ||
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0) {
-        sm_log(SM_LOG_ERROR, "handlers: setsockopt timeout failed: %m");
+        sm_log(SM_LOG_ERROR, "handlers: setsockopt timeout failed: %s", strerror(errno));
         return -1;
     }
     return 0;
@@ -66,7 +66,7 @@ static int send_reply(int fd, int response_code)
     sm_reply_t reply = { .response_code = (int32_t)response_code };
 
     if (send(fd, &reply, sizeof(reply), MSG_NOSIGNAL) < 0) {
-        sm_log(SM_LOG_ERROR, "handlers: send reply failed: %m");
+        sm_log(SM_LOG_ERROR, "handlers: send reply failed: %s", strerror(errno));
         return -1;
     }
     return 0;
@@ -83,7 +83,7 @@ static int send_reply_lookup(int fd, const service_entry_t* entry)
     reply.service_pid = (int32_t)entry->pid;
 
     if (send(fd, &reply, sizeof(reply), MSG_NOSIGNAL) < 0) {
-        sm_log(SM_LOG_ERROR, "handlers: send lookup reply failed: %m");
+        sm_log(SM_LOG_ERROR, "handlers: send lookup reply failed: %s", strerror(errno));
         return -1;
     }
     return 0;
@@ -296,7 +296,7 @@ int sm_handle_client(int client_fd)
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             sm_log(SM_LOG_WARN, "handlers: header recv timeout pid=%d", (int)peer_pid);
         else
-            sm_log(SM_LOG_ERROR, "handlers: header recv failed: %m");
+            sm_log(SM_LOG_ERROR, "handlers: header recv failed: %s", strerror(errno));
         return -1;
     }
     if ((size_t)n != sizeof(hdr)) {
@@ -323,7 +323,7 @@ int sm_handle_client(int client_fd)
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             sm_log(SM_LOG_WARN, "handlers: payload recv timeout pid=%d", (int)peer_pid);
         else
-            sm_log(SM_LOG_ERROR, "handlers: payload recv failed: %m");
+            sm_log(SM_LOG_ERROR, "handlers: payload recv failed: %s", strerror(errno));
         return -1;
     }
     if ((size_t)n != (size_t)hdr.length) {

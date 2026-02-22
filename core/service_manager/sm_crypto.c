@@ -275,7 +275,7 @@ static int generate_key(uint8_t* out, size_t len)
 
     fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
-        sm_log(SM_LOG_ERROR, "crypto: cannot open /dev/urandom: %m");
+        sm_log(SM_LOG_ERROR, "crypto: cannot open /dev/urandom: %s", strerror(errno));
         return -1;
     }
 
@@ -293,46 +293,65 @@ int sm_crypto_init(void)
 {
     int     fd;
     ssize_t n;
+    const char* key_paths[] = {
+        SM_KEY_FILE,                           /* /run/servicemanager.key */
+        "/tmp/servicemanager.key",             /* fallback to /tmp */
+        NULL
+    };
+    const char* key_file = NULL;
+    int path_idx = 0;
 
-    /* Try to load an existing key */
-    fd = open(SM_KEY_FILE, O_RDONLY | O_CLOEXEC);
-    if (fd >= 0) {
-        n = read(fd, g_key, SM_HMAC_KEY_SIZE);
-        close(fd);
-        if (n == SM_HMAC_KEY_SIZE) {
-            g_key_loaded = 1;
-            sm_log(SM_LOG_INFO, "crypto: key loaded from %s", SM_KEY_FILE);
-            return 0;
+    /* Try each key file path until one works */
+    while (key_paths[path_idx] != NULL) {
+        key_file = key_paths[path_idx];
+        
+        /* Try to load an existing key */
+        fd = open(key_file, O_RDONLY | O_CLOEXEC);
+        if (fd >= 0) {
+            n = read(fd, g_key, SM_HMAC_KEY_SIZE);
+            close(fd);
+            if (n == SM_HMAC_KEY_SIZE) {
+                g_key_loaded = 1;
+                sm_log(SM_LOG_INFO, "crypto: key loaded from %s", key_file);
+                return 0;
+            }
+            sm_log(SM_LOG_WARN, "crypto: key file truncated at %s, regenerating", key_file);
         }
-        sm_log(SM_LOG_WARN, "crypto: key file truncated, regenerating");
+
+        /* Generate a new key */
+        if (generate_key(g_key, SM_HMAC_KEY_SIZE) != 0) {
+            path_idx++;
+            continue;
+        }
+
+        /* Write key file with restricted permissions */
+        fd = open(key_file,
+                  O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+                  SM_KEY_FILE_MODE);
+        if (fd < 0) {
+            sm_log(SM_LOG_WARN, "crypto: cannot create key file %s, trying fallback", key_file);
+            path_idx++;
+            continue;
+        }
+
+        n = write(fd, g_key, SM_HMAC_KEY_SIZE);
+        close(fd);
+
+        if (n != SM_HMAC_KEY_SIZE) {
+            sm_log(SM_LOG_WARN, "crypto: failed to write key file %s, trying fallback", key_file);
+            path_idx++;
+            continue;
+        }
+
+        g_key_loaded = 1;
+        sm_log(SM_LOG_INFO, "crypto: new key generated and saved to %s", key_file);
+        return 0;
     }
 
-    /* Generate a new key */
-    if (generate_key(g_key, SM_HMAC_KEY_SIZE) != 0)
-        return -1;
-
-    /* Write key file with restricted permissions */
-    fd = open(SM_KEY_FILE,
-              O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
-              SM_KEY_FILE_MODE);
-    if (fd < 0) {
-        sm_log(SM_LOG_ERROR, "crypto: cannot create key file %s: %m", SM_KEY_FILE);
-        explicit_bzero(g_key, sizeof(g_key));
-        return -1;
-    }
-
-    n = write(fd, g_key, SM_HMAC_KEY_SIZE);
-    close(fd);
-
-    if (n != SM_HMAC_KEY_SIZE) {
-        sm_log(SM_LOG_ERROR, "crypto: failed to write key file");
-        explicit_bzero(g_key, sizeof(g_key));
-        return -1;
-    }
-
-    g_key_loaded = 1;
-    sm_log(SM_LOG_INFO, "crypto: new key generated and saved to %s", SM_KEY_FILE);
-    return 0;
+    /* All paths failed */
+    sm_log(SM_LOG_ERROR, "crypto: failed to write key file to any location");
+    explicit_bzero(g_key, sizeof(g_key));
+    return -1;
 }
 
 const uint8_t* sm_crypto_get_key(void)

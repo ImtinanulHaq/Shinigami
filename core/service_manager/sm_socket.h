@@ -17,6 +17,9 @@
 /* Create the server socket, bind, chmod, listen. Returns 0 on success. */
 int  sm_socket_setup(void);
 
+/* Get the actual socket path being used (might be /tmp fallback) */
+const char* sm_socket_get_path(void);
+
 /* Close server fd and unlink the socket file */
 void sm_socket_cleanup(void);
 

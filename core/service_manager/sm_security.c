@@ -60,18 +60,18 @@ int sm_drop_privileges(void)
 
     /* Drop supplementary groups first */
     if (initgroups(SM_USERNAME, grp->gr_gid) < 0) {
-        sm_log(SM_LOG_ERROR, "security: initgroups failed: %m");
+        sm_log(SM_LOG_ERROR, "security: initgroups failed: %s", strerror(errno));
         return -1;
     }
 
     /* Must drop GID before UID; once UID is dropped we lose CAP_SETGID */
     if (setgid(grp->gr_gid) < 0) {
-        sm_log(SM_LOG_ERROR, "security: setgid(%d) failed: %m", (int)grp->gr_gid);
+        sm_log(SM_LOG_ERROR, "security: setgid(%d) failed: %s", (int)grp->gr_gid, strerror(errno));
         return -1;
     }
 
     if (setuid(pwd->pw_uid) < 0) {
-        sm_log(SM_LOG_ERROR, "security: setuid(%d) failed: %m", (int)pwd->pw_uid);
+        sm_log(SM_LOG_ERROR, "security: setuid(%d) failed: %s", (int)pwd->pw_uid, strerror(errno));
         return -1;
     }
 
@@ -105,14 +105,14 @@ int sm_set_resource_limits(void)
     /* Limit open file descriptors */
     struct rlimit rl_nofile = { .rlim_cur = 512, .rlim_max = 512 };
     if (setrlimit(RLIMIT_NOFILE, &rl_nofile) < 0) {
-        sm_log(SM_LOG_ERROR, "security: setrlimit NOFILE: %m");
+        sm_log(SM_LOG_ERROR, "security: setrlimit NOFILE: %s", strerror(errno));
         return -1;
     }
 
     /* Prevent fork bombs */
     struct rlimit rl_nproc = { .rlim_cur = 64, .rlim_max = 64 };
     if (setrlimit(RLIMIT_NPROC, &rl_nproc) < 0) {
-        sm_log(SM_LOG_ERROR, "security: setrlimit NPROC: %m");
+        sm_log(SM_LOG_ERROR, "security: setrlimit NPROC: %s", strerror(errno));
         return -1;
     }
 
@@ -122,14 +122,14 @@ int sm_set_resource_limits(void)
         .rlim_max = 256UL * 1024 * 1024,
     };
     if (setrlimit(RLIMIT_AS, &rl_as) < 0) {
-        sm_log(SM_LOG_ERROR, "security: setrlimit AS: %m");
+        sm_log(SM_LOG_ERROR, "security: setrlimit AS: %s", strerror(errno));
         return -1;
     }
 
     /* Disable core dumps */
     struct rlimit rl_core = { .rlim_cur = 0, .rlim_max = 0 };
     if (setrlimit(RLIMIT_CORE, &rl_core) < 0) {
-        sm_log(SM_LOG_ERROR, "security: setrlimit CORE: %m");
+        sm_log(SM_LOG_ERROR, "security: setrlimit CORE: %s", strerror(errno));
         return -1;
     }
 
@@ -239,12 +239,12 @@ int sm_setup_seccomp(void)
 
     /* Prevent privilege escalation via execve+setuid */
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) {
-        sm_log(SM_LOG_ERROR, "security: PR_SET_NO_NEW_PRIVS failed: %m");
+        sm_log(SM_LOG_ERROR, "security: PR_SET_NO_NEW_PRIVS failed: %s", strerror(errno));
         return -1;
     }
 
     if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) < 0) {
-        sm_log(SM_LOG_ERROR, "security: seccomp filter install failed: %m");
+        sm_log(SM_LOG_ERROR, "security: seccomp filter install failed: %s", strerror(errno));
         return -1;
     }
 
@@ -274,7 +274,7 @@ uid_t sm_get_peer_uid(int fd)
     socklen_t    len  = sizeof(cred);
 
     if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0) {
-        sm_log(SM_LOG_ERROR, "security: SO_PEERCRED (uid) failed: %m");
+        sm_log(SM_LOG_ERROR, "security: SO_PEERCRED (uid) failed: %s", strerror(errno));
         return (uid_t)-1;
     }
     return cred.uid;
@@ -286,7 +286,7 @@ gid_t sm_get_peer_gid(int fd)
     socklen_t    len  = sizeof(cred);
 
     if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0) {
-        sm_log(SM_LOG_ERROR, "security: SO_PEERCRED (gid) failed: %m");
+        sm_log(SM_LOG_ERROR, "security: SO_PEERCRED (gid) failed: %s", strerror(errno));
         return (gid_t)-1;
     }
     return cred.gid;
@@ -298,7 +298,7 @@ pid_t sm_get_peer_pid(int fd)
     socklen_t    len  = sizeof(cred);
 
     if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0) {
-        sm_log(SM_LOG_ERROR, "security: SO_PEERCRED (pid) failed: %m");
+        sm_log(SM_LOG_ERROR, "security: SO_PEERCRED (pid) failed: %s", strerror(errno));
         return (pid_t)-1;
     }
     return cred.pid;

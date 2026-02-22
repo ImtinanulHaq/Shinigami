@@ -144,7 +144,7 @@ static int threadpool_init(void)
 
     for (i = 0; i < THREAD_POOL_SIZE; i++) {
         if (pthread_create(&workers[i], NULL, worker_thread, NULL) != 0) {
-            sm_log(SM_LOG_ERROR, "main: pthread_create worker %d failed: %m", i);
+            sm_log(SM_LOG_ERROR, "main: pthread_create worker %d failed: %s", i, strerror(errno));
             return -1;
         }
     }
@@ -312,7 +312,7 @@ int sm_run(void)
 
     epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     if (epoll_fd < 0) {
-        sm_log(SM_LOG_ERROR, "main: epoll_create1 failed: %m");
+        sm_log(SM_LOG_ERROR, "main: epoll_create1 failed: %s", strerror(errno));
         cleanup();
         return -1;
     }
@@ -325,7 +325,7 @@ int sm_run(void)
     
     int signal_fd = signalfd(-1, &sigset, SFD_CLOEXEC | SFD_NONBLOCK);
     if (signal_fd < 0) {
-        sm_log(SM_LOG_ERROR, "main: signalfd failed: %m");
+        sm_log(SM_LOG_ERROR, "main: signalfd failed: %s", strerror(errno));
         close(epoll_fd);
         cleanup();
         return -1;
@@ -337,7 +337,7 @@ int sm_run(void)
     ev.data.fd = server_fd;
 
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_fd, &ev) < 0) {
-        sm_log(SM_LOG_ERROR, "main: epoll_ctl ADD failed: %m");
+        sm_log(SM_LOG_ERROR, "main: epoll_ctl ADD failed: %s", strerror(errno));
         close(signal_fd);
         close(epoll_fd);
         cleanup();
@@ -350,7 +350,7 @@ int sm_run(void)
     ev.data.fd = signal_fd;
     
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, signal_fd, &ev) < 0) {
-        sm_log(SM_LOG_ERROR, "main: epoll_ctl ADD signal_fd failed: %m");
+        sm_log(SM_LOG_ERROR, "main: epoll_ctl ADD signal_fd failed: %s", strerror(errno));
         close(signal_fd);
         close(epoll_fd);
         cleanup();
@@ -368,7 +368,7 @@ int sm_run(void)
             if (errno == EINTR) {
                 continue;
             }
-            sm_log(SM_LOG_ERROR, "main: epoll_wait failed: %m");
+            sm_log(SM_LOG_ERROR, "main: epoll_wait failed: %s", strerror(errno));
             break;
         }
 
@@ -413,7 +413,7 @@ int sm_run(void)
             int client_fd = accept4(server_fd, NULL, NULL, SOCK_CLOEXEC);
             if (client_fd < 0) {
                 if (errno != EAGAIN && errno != EWOULDBLOCK)
-                    sm_log(SM_LOG_ERROR, "main: accept4 failed: %m");
+                    sm_log(SM_LOG_ERROR, "main: accept4 failed: %s", strerror(errno));
                 continue;
             }
 
@@ -505,7 +505,7 @@ static int sm_connect_persistent(void)
 
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, SM_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, sm_socket_get_path(), sizeof(addr.sun_path) - 1);
 
     if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         close(fd);
@@ -519,6 +519,14 @@ int sm_register(const char* name, const char* socket_path, const char* ring_name
     int               fd;
     sm_register_req_t req  = {0};
     sm_reply_t        reply = {0};
+    
+    /* Input validation */
+    if (!name || !socket_path || !ring_name) {
+        return SM_ERR_INVALID;
+    }
+    if (strlen(name) == 0 || strlen(socket_path) == 0 || strlen(ring_name) == 0) {
+        return SM_ERR_INVALID;
+    }
 
     fd = sm_connect_persistent();
     if (fd < 0) return SM_ERR_NOT_FOUND;
@@ -543,6 +551,14 @@ int sm_lookup(const char* name, char* socket_path_out, char* ring_name_out)
     int               fd;
     sm_lookup_req_t   req   = {0};
     sm_lookup_reply_t reply = {0};
+    
+    /* Input validation */
+    if (!name || strlen(name) == 0) {
+        return SM_ERR_INVALID;
+    }
+    if (!socket_path_out || !ring_name_out) {
+        return SM_ERR_INVALID;
+    }
 
     fd = sm_connect_persistent();
     if (fd < 0) return SM_ERR_NOT_FOUND;
@@ -568,6 +584,11 @@ int sm_heartbeat(const char* name)
     int                  fd;
     sm_heartbeat_req_t   req   = {0};
     sm_reply_t           reply = {0};
+    
+    /* Input validation */
+    if (!name || strlen(name) == 0) {
+        return SM_ERR_INVALID;
+    }
 
     fd = sm_connect_persistent();
     if (fd < 0) return SM_ERR_NOT_FOUND;
@@ -589,6 +610,11 @@ int sm_unregister(const char* name)
     int                   fd;
     sm_unregister_req_t   req   = {0};
     sm_reply_t            reply = {0};
+    
+    /* Input validation */
+    if (!name || strlen(name) == 0) {
+        return SM_ERR_INVALID;
+    }
 
     fd = sm_connect_persistent();
     if (fd < 0) return SM_ERR_NOT_FOUND;
