@@ -1,5 +1,5 @@
 /* Level 5: Fuzz Target - Protocol parser fuzzing with ASAN instrumentation */
-#include "sm_protocol.h"
+#include <core/service_manager/infrastructure/sm_protocol.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>

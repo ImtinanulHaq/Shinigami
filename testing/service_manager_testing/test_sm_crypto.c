@@ -1,6 +1,6 @@
 /* Unit tests for sm_crypto - HMAC/SHA256 operations */
 #include "unity.h"
-#include "sm_crypto.h"
+#include "../../core/service_manager/security/sm_crypto.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

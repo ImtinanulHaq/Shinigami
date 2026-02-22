@@ -1,6 +1,6 @@
 /* Unit tests for sm_registry - Registry operations */
 #include "unity.h"
-#include "sm_registry.h"
+#include "../../core/service_manager/infrastructure/sm_registry.h"
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>

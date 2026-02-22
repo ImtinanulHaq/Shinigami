@@ -2,7 +2,14 @@
 # Supports Level 1-5 testing infrastructure
 
 CC := gcc
-CFLAGS := -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L -I../../core/service_manager
+CFLAGS := -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L \
+          -I../../ \
+          -I../../core/service_manager \
+          -I../../core/service_manager/enterprise \
+          -I../../core/service_manager/infrastructure \
+          -I../../core/service_manager/security \
+          -I../../core/service_manager/observability \
+          -I../../core/service_manager/lifecycle
 LDFLAGS := -lpthread
 ASAN_FLAGS := -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
 UBSAN_FLAGS := -fsanitize=undefined
@@ -14,10 +21,10 @@ TESTS_DIR := .
 
 # Source files from core - minimal set for fuzz testing
 # (Excludes handlers, health, security as they have complex dependencies)
-CORE_SRCS := $(CORE_DIR)/sm_protocol.c \
-             $(CORE_DIR)/sm_registry.c \
-             $(CORE_DIR)/sm_crypto.c \
-             $(CORE_DIR)/sm_rate_limit.c
+CORE_SRCS := $(CORE_DIR)/infrastructure/sm_protocol.c \
+             $(CORE_DIR)/infrastructure/sm_registry.c \
+             $(CORE_DIR)/security/sm_crypto.c \
+             $(CORE_DIR)/security/sm_rate_limit.c
 
 # Test files (Unit Tests - Level 2)
 UNIT_TESTS := test_sm_protocol \
@@ -79,14 +86,14 @@ $(BUILD_DIR)/unity.o: unity.c unity.h | $(BUILD_DIR)
 $(BUILD_DIR)/test_sm_protocol: test_sm_protocol.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ test_sm_protocol.c $(BUILD_DIR)/unity.o $(LDFLAGS)
 
-$(BUILD_DIR)/test_sm_registry: test_sm_registry.c $(CORE_DIR)/sm_registry.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_sm_registry.c $(CORE_DIR)/sm_registry.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o $(LDFLAGS)
+$(BUILD_DIR)/test_sm_registry: test_sm_registry.c $(CORE_DIR)/infrastructure/sm_registry.c $(CORE_DIR)/observability/sm_logging.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_sm_registry.c $(CORE_DIR)/infrastructure/sm_registry.c $(CORE_DIR)/observability/sm_logging.c $(BUILD_DIR)/unity.o $(LDFLAGS)
 
-$(BUILD_DIR)/test_sm_crypto: test_sm_crypto.c $(CORE_DIR)/sm_crypto.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_sm_crypto.c $(CORE_DIR)/sm_crypto.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o $(LDFLAGS)
+$(BUILD_DIR)/test_sm_crypto: test_sm_crypto.c $(CORE_DIR)/security/sm_crypto.c $(CORE_DIR)/observability/sm_logging.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_sm_crypto.c $(CORE_DIR)/security/sm_crypto.c $(CORE_DIR)/observability/sm_logging.c $(BUILD_DIR)/unity.o $(LDFLAGS)
 
-$(BUILD_DIR)/test_sm_rate_limit: test_sm_rate_limit.c $(CORE_DIR)/sm_rate_limit.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_sm_rate_limit.c $(CORE_DIR)/sm_rate_limit.c $(CORE_DIR)/sm_logging.c $(BUILD_DIR)/unity.o $(LDFLAGS)
+$(BUILD_DIR)/test_sm_rate_limit: test_sm_rate_limit.c $(CORE_DIR)/security/sm_rate_limit.c $(CORE_DIR)/observability/sm_logging.c $(BUILD_DIR)/unity.o | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_sm_rate_limit.c $(CORE_DIR)/security/sm_rate_limit.c $(CORE_DIR)/observability/sm_logging.c $(BUILD_DIR)/unity.o $(LDFLAGS)
 
 # Fuzz target compilation
 $(FUZZ_TARGET): fuzz_target.c | $(BUILD_DIR)
