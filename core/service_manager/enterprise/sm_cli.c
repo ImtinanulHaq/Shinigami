@@ -13,11 +13,22 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <time.h>
 
 static int g_cli_socket = -1;
+
+/* FIX: Signal handler ke liye volatile flag
+ * Ctrl+C dabane par monitor loop turant band ho jaye */
+static volatile sig_atomic_t g_monitor_running = 0;
+
+static void monitor_sigint_handler(int sig)
+{
+    (void)sig;
+    g_monitor_running = 0;  /* Loop band karo */
+}
 
 int sm_cli_connect_to_manager(const char* socket_path)
 {
@@ -83,7 +94,7 @@ sm_cli_result_t sm_cli_execute_command(sm_cli_command_t command,
     
     response[recv_len] = '\0';
     strncpy(result.output, response, sizeof(result.output) - 1);
-    result.output[sizeof(result.output) - 1] = '\0';  /* Ensure null termination */
+    result.output[sizeof(result.output) - 1] = '\0';
     result.exit_code = 0;
     
     return result;
@@ -129,29 +140,39 @@ sm_cli_result_t sm_cli_service_info(const char* service_name)
 sm_cli_result_t sm_cli_monitor_stats(void)
 {
     sm_cli_result_t result = {0};
-    
-    time_t last_refresh = time(NULL);
-    
+
+    /* FIX: Pehle purana SIGINT handler save karo
+     * Monitor khatam hone ke baad restore kar denge */
+    struct sigaction sa_new, sa_old;
+    memset(&sa_new, 0, sizeof(sa_new));
+    sa_new.sa_handler = monitor_sigint_handler;
+    sigemptyset(&sa_new.sa_mask);
+    sa_new.sa_flags = 0;
+    sigaction(SIGINT, &sa_new, &sa_old);
+
+    /* FIX: flag ON karo — loop chalega jab tak flag ON hai */
+    g_monitor_running = 1;
+
     /* Display header */
-    printf("\n=== Service Manager Statistics ===\n");
+    printf("\n=== Service Manager Statistics (Ctrl+C to stop) ===\n");
     printf("Service | Status | CPU | Memory | Restarts | Uptime\n");
     printf("--------|--------|-----|--------|----------|-------\n");
-    
-    /* Periodically fetch and display stats */
-    while (1) {
+
+    /* FIX: while(1) hata diya — ab flag check hota hai
+     * Ctrl+C dabao: signal handler flag = 0 karta hai, loop band */
+    while (g_monitor_running) {
         sm_cli_result_t status = sm_cli_status();
         if (status.exit_code == 0) {
             printf("%s\n", status.output);
         }
-        
         sleep(1);
-        
-        /* Break after displaying for a reasonable time */
-        if (time(NULL) - last_refresh > 60) {
-            break;
-        }
     }
-    
+
+    /* FIX: Purana signal handler restore karo
+     * Taake baaki program ka SIGINT behaviour theek rahe */
+    sigaction(SIGINT, &sa_old, NULL);
+
+    printf("\nMonitoring stopped.\n");
     result.exit_code = 0;
     snprintf(result.output, sizeof(result.output), "Monitoring complete");
     return result;

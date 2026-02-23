@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 /*
- * sm_connection_pool.c - Connection pooling
+ * sm_connection_pool.c - Unix socket connection pooling.
  */
 
 #include "../infrastructure/sm_connection_pool.h"
@@ -14,177 +14,220 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <time.h>
 
 #define SOCKET_PATH "/run/servicemanager.sock"
 
+/*
+ * Each slot tracks the fd and when it was last used.
+ * Connections idle longer than CONN_MAX_IDLE_SECS are discarded on next get().
+ */
+#define CONN_MAX_IDLE_SECS 30
+
 typedef struct {
-    int* fds;
-    int  max;
-    int  available;
-    int  in_use;
+    int    fd;
+    time_t last_used;
+} conn_slot_t;
+
+typedef struct {
+    conn_slot_t*    slots;
+    int             max;
+    int             available;
+    int             in_use;
     pthread_mutex_t mutex;
+    int             initialized;
 } connpool_t;
 
-static connpool_t g_pool;
+static connpool_t g_pool = {0};
 
-int sm_connpool_init(int max_conns)
-{
-    if (max_conns <= 0) max_conns = 10;
-    
-    g_pool.fds = malloc((size_t)max_conns * sizeof(int));
-    if (!g_pool.fds) return -1;
-    
-    for (int i = 0; i < max_conns; i++) {
-        g_pool.fds[i] = -1;
-    }
-    
-    g_pool.max = max_conns;
-    g_pool.available = 0;
-    g_pool.in_use = 0;
-    pthread_mutex_init(&g_pool.mutex, NULL);
-    
-    return 0;
-}
+/* ── Internal helpers ────────────────────────────────────────────────────────── */
 
 static int create_connection(void)
 {
-    int fd;
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        sm_log(SM_LOG_ERROR, "connpool: socket() failed: %s", strerror(errno));
+        return -1;
+    }
+
     struct sockaddr_un addr;
-    
-    fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) return -1;
-    
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
-    
+
     if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        sm_log(SM_LOG_WARN, "connpool: connect() failed: %s", strerror(errno));
         close(fd);
         return -1;
     }
-    
+
     return fd;
 }
 
-static int verify_connection_alive(int fd)
+/*
+ * Check whether a pooled connection is still usable.
+ * Uses MSG_PEEK | MSG_DONTWAIT: EAGAIN/EWOULDBLOCK means alive (no pending
+ * data but socket is open). Any other result means the server closed it.
+ * Also rejects connections that have been idle too long.
+ */
+static int connection_is_alive(const conn_slot_t* slot)
 {
-    /* Test if connection is still alive by checking availability without blocking */
-    int flags = fcntl(fd, F_GETFL, 0);
+    if (slot->fd < 0) return 0;
+
+    /* Discard connections idle for too long. */
+    if (time(NULL) - slot->last_used > CONN_MAX_IDLE_SECS) return 0;
+
+    int flags = fcntl(slot->fd, F_GETFL, 0);
     if (flags < 0) return 0;
-    
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    
-    /* Try to peek at data without consuming it */
-    char test_byte;
-    ssize_t ret = recv(fd, &test_byte, 1, MSG_PEEK | MSG_DONTWAIT);
-    
-    /* Restore blocking mode */
-    fcntl(fd, F_SETFL, flags);
-    
-    /* Connection is good if: ret == -1 with EAGAIN/EWOULDBLOCK (no data but connected) */
-    if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-        return 1;  /* connection is alive */
+
+    /* Temporarily non-blocking for the peek. */
+    if (fcntl(slot->fd, F_SETFL, flags | O_NONBLOCK) < 0) return 0;
+
+    char buf;
+    ssize_t ret = recv(slot->fd, &buf, 1, MSG_PEEK | MSG_DONTWAIT);
+    int saved_errno = errno;
+
+    /* Restore original flags regardless of result. */
+    fcntl(slot->fd, F_SETFL, flags);
+
+    if (ret < 0 && (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK))
+        return 1;   /* alive — no data but connection open */
+
+    return 0;       /* ret == 0 means server closed; other errors = broken */
+}
+
+/* ── Public API ──────────────────────────────────────────────────────────────── */
+
+int sm_connpool_init(int max_conns)
+{
+    if (g_pool.initialized) {
+        sm_log(SM_LOG_WARN, "connpool: already initialized");
+        return 0;
     }
-    
-    /* Any other result indicates connection is dead */
+
+    if (max_conns <= 0) max_conns = 10;
+
+    g_pool.slots = calloc((size_t)max_conns, sizeof(conn_slot_t));
+    if (!g_pool.slots) {
+        sm_log(SM_LOG_ERROR, "connpool: calloc failed");
+        return -1;
+    }
+
+    for (int i = 0; i < max_conns; i++)
+        g_pool.slots[i].fd = -1;
+
+    g_pool.max         = max_conns;
+    g_pool.available   = 0;
+    g_pool.in_use      = 0;
+
+    if (pthread_mutex_init(&g_pool.mutex, NULL) != 0) {
+        sm_log(SM_LOG_ERROR, "connpool: mutex init failed: %s", strerror(errno));
+        free(g_pool.slots);
+        g_pool.slots = NULL;
+        return -1;
+    }
+
+    g_pool.initialized = 1;
+    sm_log(SM_LOG_INFO, "connpool: initialized (max=%d)", max_conns);
     return 0;
 }
 
 int sm_connpool_get(void)
 {
-    int fd = -1;
-    
+    if (!g_pool.initialized) return -1;
+
     pthread_mutex_lock(&g_pool.mutex);
-    
-    /* Try to get a healthy connection from pool */
+
+    /* Return the first alive pooled connection. */
     for (int i = 0; i < g_pool.max; i++) {
-        if (g_pool.fds[i] >= 0) {
-            /* Verify connection is still alive before returning it */
-            if (verify_connection_alive(g_pool.fds[i])) {
-                fd = g_pool.fds[i];
-                g_pool.fds[i] = -1;
-                g_pool.available--;
-                g_pool.in_use++;
-                pthread_mutex_unlock(&g_pool.mutex);
-                return fd;  /* Connection returned successfully */
-            } else {
-                /* Connection is dead, close and remove from pool */
-                close(g_pool.fds[i]);
-                g_pool.fds[i] = -1;
-                g_pool.available--;
-            }
+        if (g_pool.slots[i].fd < 0) continue;
+
+        if (connection_is_alive(&g_pool.slots[i])) {
+            int fd = g_pool.slots[i].fd;
+            g_pool.slots[i].fd = -1;
+            g_pool.available--;
+            g_pool.in_use++;
+            pthread_mutex_unlock(&g_pool.mutex);
+            return fd;
         }
+
+        /* Dead slot — close and clear it. */
+        close(g_pool.slots[i].fd);
+        g_pool.slots[i].fd = -1;
+        g_pool.available--;
+        sm_log(SM_LOG_DEBUG, "connpool: discarded stale connection");
     }
-    
-    /* No pooled connection available; account for new connection about to be created */
-    /* (Done under lock to maintain consistency) */
+
+    /* No pooled connection available; reserve a slot for the new one. */
     g_pool.in_use++;
-    
     pthread_mutex_unlock(&g_pool.mutex);
-    
-    /* Create new connection outside the lock (non-blocking operation) */
-    fd = create_connection();
-    
+
+    int fd = create_connection();
     if (fd < 0) {
-        /* Creation failed, undo the in_use increment */
         pthread_mutex_lock(&g_pool.mutex);
         g_pool.in_use--;
         pthread_mutex_unlock(&g_pool.mutex);
         return -1;
     }
-    
+
     return fd;
 }
 
 void sm_connpool_put(int fd)
 {
-    if (fd < 0) return;
-    
+    if (fd < 0 || !g_pool.initialized) return;
+
     pthread_mutex_lock(&g_pool.mutex);
-    
-    /* Try to store in pool if there's space */
+
+    /* Store in the first empty slot. */
     for (int i = 0; i < g_pool.max; i++) {
-        if (g_pool.fds[i] < 0) {
-            g_pool.fds[i] = fd;
+        if (g_pool.slots[i].fd < 0) {
+            g_pool.slots[i].fd        = fd;
+            g_pool.slots[i].last_used = time(NULL);
             g_pool.available++;
             g_pool.in_use--;
             pthread_mutex_unlock(&g_pool.mutex);
             return;
         }
     }
-    
-    /* Pool is full, must decrement in_use under lock before closing */
+
+    /* Pool is full — release the in_use count then close outside the lock. */
     g_pool.in_use--;
     pthread_mutex_unlock(&g_pool.mutex);
-    
-    /* Close connection outside the lock */
+
     close(fd);
 }
 
 void sm_connpool_cleanup(void)
 {
-    if (!g_pool.fds) return;
-    
+    if (!g_pool.initialized) return;
+
     pthread_mutex_lock(&g_pool.mutex);
-    
+
     for (int i = 0; i < g_pool.max; i++) {
-        if (g_pool.fds[i] >= 0) {
-            close(g_pool.fds[i]);
+        if (g_pool.slots[i].fd >= 0) {
+            close(g_pool.slots[i].fd);
+            g_pool.slots[i].fd = -1;
         }
     }
-    
-    free(g_pool.fds);
-    g_pool.fds = NULL;
-    g_pool.max = 0;
-    
+
+    free(g_pool.slots);
+    g_pool.slots       = NULL;
+    g_pool.max         = 0;
+    g_pool.initialized = 0;
+
     pthread_mutex_unlock(&g_pool.mutex);
     pthread_mutex_destroy(&g_pool.mutex);
+
+    sm_log(SM_LOG_INFO, "connpool: cleanup complete");
 }
 
 void sm_connpool_stats(int* available, int* in_use)
 {
+    if (!available || !in_use) return;
+
     pthread_mutex_lock(&g_pool.mutex);
     *available = g_pool.available;
-    *in_use = g_pool.in_use;
+    *in_use    = g_pool.in_use;
     pthread_mutex_unlock(&g_pool.mutex);
 }

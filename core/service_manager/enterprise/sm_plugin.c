@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <dlfcn.h>
+#include <time.h>
 
 #define MAX_PLUGINS 64
 #define DEFAULT_PLUGIN_TIMEOUT 30
@@ -189,9 +190,11 @@ int sm_plugin_execute(const char* plugin_name, const char* argument,
     if (!g_plugin_system.initialized || !plugin_name) {
         return -1;
     }
-    
+
+    /* timeout value lock ke andar copy karo */
     pthread_mutex_lock(&g_plugin_system.lock);
-    
+    int timeout_seconds = g_plugin_system.timeout_seconds;
+
     plugin_entry_t* entry = NULL;
     for (int i = 0; i < g_plugin_system.plugin_count; i++) {
         if (strcmp(g_plugin_system.plugins[i].name, plugin_name) == 0) {
@@ -205,13 +208,17 @@ int sm_plugin_execute(const char* plugin_name, const char* argument,
         sm_log(SM_LOG_WARN, "plugin: '%s' not found or disabled", plugin_name);
         return -1;
     }
-    
+
+    /* entry ka path copy karo — lock ke bahar use karenge */
+    char path_copy[256];
+    strncpy(path_copy, entry->path, sizeof(path_copy) - 1);
+    path_copy[255] = '\0';
+
     pthread_mutex_unlock(&g_plugin_system.lock);
     
     int exit_code = -1;
     
     if (entry->is_script) {
-        /* Execute script */
         pid_t pid = fork();
         if (pid < 0) {
             sm_log(SM_LOG_ERROR, "plugin: fork failed: %s", strerror(errno));
@@ -220,36 +227,64 @@ int sm_plugin_execute(const char* plugin_name, const char* argument,
         
         if (pid == 0) {
             /* Child process */
-            if (output_buffer && output_size > 0) {
-                (void)dup2(1, 1);  /* Redirect stdout */
-            }
-            execl(entry->path, entry->path, argument, NULL);
+            execl(path_copy, path_copy, argument, NULL);
             exit(127);
         }
-        
-        /* Parent: wait with timeout */
-        int status;
-        int result = waitpid(pid, &status, 0);
-        
-        if (result < 0) {
-            sm_log(SM_LOG_ERROR, "plugin: waitpid failed: %s", strerror(errno));
+
+        /* FIX: Parent — timeout ke saath wait karo
+         * Pehle WNOHANG loop chalao deadline tak
+         * Deadline guzri? SIGKILL bhejo child ko */
+        time_t deadline = time(NULL) + timeout_seconds;
+        int status = 0;
+        int waited = 0;
+
+        while (time(NULL) < deadline) {
+            pid_t result = waitpid(pid, &status, WNOHANG);
+
+            if (result == pid) {
+                /* Child khatam ho gaya */
+                waited = 1;
+                break;
+            } else if (result < 0) {
+                sm_log(SM_LOG_ERROR, "plugin: waitpid failed: %s", strerror(errno));
+                break;
+            }
+
+            /* Child abhi chal raha hai — 100ms ruko phir dobara check */
+            struct timespec ts = {0, 100000000L};
+            nanosleep(&ts, NULL);
+        }
+
+        if (!waited) {
+            /* Timeout! Child ko force kill karo */
+            sm_log(SM_LOG_WARN, "plugin: '%s' timed out (%d sec), killing child pid=%d",
+                   plugin_name, timeout_seconds, (int)pid);
             kill(pid, SIGKILL);
+            waitpid(pid, &status, 0); /* zombie saaf karo */
             exit_code = -1;
         } else if (WIFEXITED(status)) {
             exit_code = WEXITSTATUS(status);
         } else {
             exit_code = -1;
         }
+
     } else {
-        /* Call library function (stub implementation) */
+        /* Library plugin */
         sm_log(SM_LOG_DEBUG, "plugin: library execution stub for '%s'", plugin_name);
         exit_code = 0;
     }
     
+    /* Stats update karo */
     pthread_mutex_lock(&g_plugin_system.lock);
-    entry->execution_count++;
-    if (exit_code != 0) {
-        entry->failure_count++;
+    /* entry pointer dobara dhundho — lock ke bahar stale ho sakta tha */
+    for (int i = 0; i < g_plugin_system.plugin_count; i++) {
+        if (strcmp(g_plugin_system.plugins[i].name, plugin_name) == 0) {
+            g_plugin_system.plugins[i].execution_count++;
+            if (exit_code != 0) {
+                g_plugin_system.plugins[i].failure_count++;
+            }
+            break;
+        }
     }
     pthread_mutex_unlock(&g_plugin_system.lock);
     

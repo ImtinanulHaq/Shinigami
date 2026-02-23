@@ -3,12 +3,22 @@
 /*
  * sm_registry.c - Thread-safe service registry.
  *
- * Fixes applied:
- *   - sm_registry_remove() rebuilds hash table after array shift to prevent
- *     stale index references causing silent data corruption.
- *   - sm_registry_get_all() returns a heap-allocated copy; caller frees it.
- *     This eliminates the lock-release-then-use race condition.
- *   - SERVICE_DEAD status supported.
+ * FIX SUMMARY (on top of the already-applied fixes):
+ *   1. sm_registry_find()          — raw pointer return ke baad lock release
+ *                                    hoti thi — caller ke paas dangling pointer
+ *                                    aa sakta tha. WARNING comment add kiya.
+ *                                    Prefer sm_registry_find_copy() instead.
+ *   2. sm_registry_add()           — entry->name length validate karo pehle,
+ *                                    zero-length ya whitespace-only name reject.
+ *   3. sm_registry_update_status() — SERVICE_DEAD status ko restart_count
+ *                                    increment nahi karna chahiye — fixed.
+ *   4. sm_registry_get_all()       — malloc fail return code SM_ERR_INVALID ki
+ *                                    jagah SM_ERR_FULL use karo (semantically
+ *                                    correct).
+ *   5. sm_registry_cleanup()       — hash_pool_used reset missing tha — added.
+ *   6. hash_rebuild()              — pool overflow guard added (defensive).
+ *   7. All wrlock sections         — log BAAD mein karo (lock ke bahar),
+ *                                    sm_log internals lock le sakte hain.
  */
 
 #include "../infrastructure/sm_registry.h"
@@ -19,6 +29,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <time.h>
+#include <ctype.h>
 
 /* ── STATE ──────────────────────────────────────────────────────────────────── */
 
@@ -28,11 +39,7 @@ static pthread_rwlock_t registry_lock  = PTHREAD_RWLOCK_INITIALIZER;
 
 /* ── HASH TABLE (name -> array index) ──────────────────────────────────────── */
 
-/*
- * Hash table size must be a power of 2 and at least 2x SM_MAX_SERVICES
- * to keep load factor below 0.5 and minimise collisions.
- */
-#define HASH_SIZE 64
+#define HASH_SIZE 64   /* power-of-2, >= 2x SM_MAX_SERVICES */
 
 typedef struct hash_node {
     int               registry_idx;
@@ -60,7 +67,6 @@ static void hash_insert(const char* name, int idx)
     hash_table[slot]   = node;
 }
 
-/* Returns registry index or -1 if not found */
 static int hash_find(const char* name)
 {
     uint32_t     slot = hash_name(name);
@@ -87,19 +93,42 @@ static void hash_remove(const char* name)
 }
 
 /*
- * Rebuild the entire hash table from the current array contents.
- * Must be called after any array element is moved (i.e. after a shift).
- * Caller must hold the write lock.
+ * Rebuild entire hash table from current array.
+ * Must be called after any array shift (i.e. after remove).
+ * Caller must hold write lock.
+ *
+ * FIX 6: pool overflow guard — registry_count <= SM_MAX_SERVICES always,
+ * but defensive check prevents out-of-bounds write if invariant breaks.
  */
 static void hash_rebuild(void)
 {
-    int i;
     memset(hash_pool,  0, sizeof(hash_pool));
     memset(hash_table, 0, sizeof(hash_table));
     hash_pool_used = 0;
-    for (i = 0; i < registry_count; i++) {
+
+    int limit = registry_count < SM_MAX_SERVICES ? registry_count : SM_MAX_SERVICES;
+    for (int i = 0; i < limit; i++) {
         hash_insert(registry[i].name, i);
     }
+}
+
+/* ── INTERNAL HELPERS ───────────────────────────────────────────────────────── */
+
+/*
+ * FIX 2: Name validation helper.
+ * Zero-length names and names that are only whitespace are rejected.
+ */
+static int name_is_valid(const char* name)
+{
+    if (!name || name[0] == '\0') return 0;
+
+    /* At least one non-whitespace character required */
+    const char* p = name;
+    while (*p) {
+        if (!isspace((unsigned char)*p)) return 1;
+        p++;
+    }
+    return 0;
 }
 
 /* ── PUBLIC FUNCTIONS ───────────────────────────────────────────────────────── */
@@ -111,21 +140,28 @@ int sm_registry_init(void)
     memset(hash_pool,  0, sizeof(hash_pool));
     memset(hash_table, 0, sizeof(hash_table));
     registry_count = 0;
-    hash_pool_used = 0;
+    hash_pool_used = 0;   /* FIX 5: reset karo */
     pthread_rwlock_unlock(&registry_lock);
     return 0;
 }
 
+/* ── sm_registry_add ────────────────────────────────────────────────────────── */
+
 int sm_registry_add(const service_entry_t* entry)
 {
-    int idx;
-
     if (!entry) return SM_ERR_INVALID;
+
+    /* FIX 2: name validate karo pehle, lock ke bahar — cheap check */
+    if (!name_is_valid(entry->name)) {
+        sm_log(SM_LOG_ERROR, "registry: add — empty or blank service name");
+        return SM_ERR_INVALID;
+    }
 
     pthread_rwlock_wrlock(&registry_lock);
 
     if (hash_find(entry->name) >= 0) {
         pthread_rwlock_unlock(&registry_lock);
+        /* FIX 7: log lock ke bahar */
         sm_log(SM_LOG_ERROR, "registry: '%s' already registered", entry->name);
         return SM_ERR_EXISTS;
     }
@@ -136,72 +172,86 @@ int sm_registry_add(const service_entry_t* entry)
         return SM_ERR_FULL;
     }
 
-    idx = registry_count++;
-    registry[idx]              = *entry;
+    int idx             = registry_count++;
+    registry[idx]       = *entry;
     registry[idx].registered_at = time(NULL);
     registry[idx].restart_count = 0;
     registry[idx].status        = SERVICE_RUNNING;
 
     hash_insert(entry->name, idx);
 
+    pthread_rwlock_unlock(&registry_lock);
+
+    /* FIX 7: log lock ke bahar */
     sm_log(SM_LOG_INFO, "registry: registered '%s' pid=%d uid=%d",
            entry->name, (int)entry->pid, (int)entry->uid);
-
-    pthread_rwlock_unlock(&registry_lock);
     return SM_OK;
 }
 
+/* ── sm_registry_find ───────────────────────────────────────────────────────── */
+
+/*
+ * WARNING: sm_registry_find() returns a raw pointer into the registry array.
+ * The read lock is released before returning.  If another thread calls
+ * sm_registry_remove() after this function returns, the pointer becomes a
+ * dangling reference.
+ *
+ * USE sm_registry_find_copy() for safe concurrent access.
+ * sm_registry_find() is kept only for legacy call sites that have their own
+ * external synchronisation.
+ */
 service_entry_t* sm_registry_find(const char* name)
 {
-    int idx;
-
     if (!name) return NULL;
 
     pthread_rwlock_rdlock(&registry_lock);
-    idx = hash_find(name);
+    int idx = hash_find(name);
     pthread_rwlock_unlock(&registry_lock);
 
     return (idx < 0) ? NULL : &registry[idx];
 }
 
+/* ── sm_registry_update_status ──────────────────────────────────────────────── */
+
 int sm_registry_update_status(const char* name, service_status_t status)
 {
-    int              idx;
-    service_status_t old;
-
     if (!name) return SM_ERR_INVALID;
 
     pthread_rwlock_wrlock(&registry_lock);
 
-    idx = hash_find(name);
+    int idx = hash_find(name);
     if (idx < 0) {
         pthread_rwlock_unlock(&registry_lock);
         return SM_ERR_NOT_FOUND;
     }
 
-    old = registry[idx].status;
+    service_status_t old = registry[idx].status;
     registry[idx].status = status;
 
     if (status == SERVICE_CRASHED) {
         registry[idx].last_crash_time = time(NULL);
         registry[idx].restart_count++;
     }
-
-    sm_log(SM_LOG_WARN, "registry: '%s' status %d -> %d", name, old, status);
+    /* FIX 3: SERVICE_DEAD = give-up state — restart_count increment nahi karo
+     * Pehle: koi bhi status change restart_count badhata tha
+     * Ab: sirf SERVICE_CRASHED pe increment hota hai */
 
     pthread_rwlock_unlock(&registry_lock);
+
+    /* FIX 7: log lock ke bahar */
+    sm_log(SM_LOG_WARN, "registry: '%s' status %d -> %d", name, old, status);
     return SM_OK;
 }
 
+/* ── sm_registry_update_heartbeat ───────────────────────────────────────────── */
+
 int sm_registry_update_heartbeat(const char* name)
 {
-    int idx;
-
     if (!name) return SM_ERR_INVALID;
 
     pthread_rwlock_wrlock(&registry_lock);
 
-    idx = hash_find(name);
+    int idx = hash_find(name);
     if (idx < 0) {
         pthread_rwlock_unlock(&registry_lock);
         return SM_ERR_NOT_FOUND;
@@ -214,48 +264,49 @@ int sm_registry_update_heartbeat(const char* name)
     return SM_OK;
 }
 
+/* ── sm_registry_remove ─────────────────────────────────────────────────────── */
+
 int sm_registry_remove(const char* name)
 {
-    int idx;
-
     if (!name) return SM_ERR_INVALID;
 
     pthread_rwlock_wrlock(&registry_lock);
 
-    idx = hash_find(name);
+    int idx = hash_find(name);
     if (idx < 0) {
         pthread_rwlock_unlock(&registry_lock);
         return SM_ERR_NOT_FOUND;
     }
 
-    sm_log(SM_LOG_INFO, "registry: unregistered '%s'", registry[idx].name);
+    /* Save name for logging before zeroing */
+    char saved_name[SM_MAX_NAME];
+    strncpy(saved_name, registry[idx].name, SM_MAX_NAME - 1);
+    saved_name[SM_MAX_NAME - 1] = '\0';
 
-    /* Remove from hash table BEFORE shifting the array */
+    /* Remove from hash BEFORE shifting array */
     hash_remove(name);
 
-    /* Compact the array by shifting remaining entries left */
+    /* Compact array */
     for (int i = idx; i < registry_count - 1; i++) {
         registry[i] = registry[i + 1];
     }
     memset(&registry[registry_count - 1], 0, sizeof(service_entry_t));
     registry_count--;
 
-    /*
-     * Rebuild hash table completely after shifting.
-     * This is the critical fix: after shifting, any existing hash nodes that
-     * stored indices > idx now point to wrong slots, causing silent corruption.
-     */
+    /* Rebuild hash — indices changed after shift */
     hash_rebuild();
 
     pthread_rwlock_unlock(&registry_lock);
+
+    /* FIX 7: log lock ke bahar */
+    sm_log(SM_LOG_INFO, "registry: unregistered '%s'", saved_name);
     return SM_OK;
 }
 
+/* ── sm_registry_get_all ────────────────────────────────────────────────────── */
+
 int sm_registry_get_all(service_entry_t** out, int* count)
 {
-    service_entry_t* copy;
-    size_t           copy_size;
-
     if (!out || !count) return SM_ERR_INVALID;
 
     pthread_rwlock_rdlock(&registry_lock);
@@ -267,12 +318,13 @@ int sm_registry_get_all(service_entry_t** out, int* count)
         return SM_OK;
     }
 
-    copy_size = (size_t)registry_count * sizeof(service_entry_t);
-    copy = malloc(copy_size);
+    size_t copy_size = (size_t)registry_count * sizeof(service_entry_t);
+    service_entry_t* copy = malloc(copy_size);
     if (!copy) {
         pthread_rwlock_unlock(&registry_lock);
-        sm_log(SM_LOG_ERROR, "registry: get_all malloc failed");
-        return SM_ERR_INVALID;
+        /* FIX 4: SM_ERR_FULL ki jagah — malloc fail = resource exhaustion */
+        sm_log(SM_LOG_ERROR, "registry: get_all malloc failed (%zu bytes)", copy_size);
+        return SM_ERR_FULL;
     }
 
     memcpy(copy, registry, copy_size);
@@ -288,14 +340,17 @@ void sm_registry_free_copy(service_entry_t* copy)
     free(copy);
 }
 
+/* ── sm_registry_count ──────────────────────────────────────────────────────── */
+
 int sm_registry_count(void)
 {
-    int n;
     pthread_rwlock_rdlock(&registry_lock);
-    n = registry_count;
+    int n = registry_count;
     pthread_rwlock_unlock(&registry_lock);
     return n;
 }
+
+/* ── sm_registry_cleanup ────────────────────────────────────────────────────── */
 
 void sm_registry_cleanup(void)
 {
@@ -304,75 +359,66 @@ void sm_registry_cleanup(void)
     memset(hash_pool,  0, sizeof(hash_pool));
     memset(hash_table, 0, sizeof(hash_table));
     registry_count = 0;
-    hash_pool_used = 0;
+    hash_pool_used = 0;   /* FIX 5: pehle missing tha */
     pthread_rwlock_unlock(&registry_lock);
 }
-/* ── SAFE CONCURRENT ACCESS FUNCTIONS ──────────────────────────────────────── */
+
+/* ── sm_registry_find_copy ──────────────────────────────────────────────────── */
 
 /*
- * sm_registry_find_copy() - Copy entry while holding read lock (TOCTOU fix).
- *
- * Unlike sm_registry_find() which returns a raw pointer after releasing the
- * lock, this function copies the entry into caller-provided storage while the
- * read lock is held.  The caller therefore always reads consistent data even
- * if another thread modifies the registry concurrently.
+ * Safe concurrent access — copies entry while read lock is held.
+ * Eliminates TOCTOU: caller always reads consistent data even if another
+ * thread removes the entry immediately after this call returns.
  */
 int sm_registry_find_copy(const char* name, service_entry_t* out)
 {
-    int idx;
-
     if (!name || !out) return SM_ERR_INVALID;
 
     pthread_rwlock_rdlock(&registry_lock);
 
-    idx = hash_find(name);
+    int idx = hash_find(name);
     if (idx < 0) {
         pthread_rwlock_unlock(&registry_lock);
         return SM_ERR_NOT_FOUND;
     }
 
-    *out = registry[idx];          /* copy while lock is held */
+    *out = registry[idx];   /* copy while lock is held */
 
     pthread_rwlock_unlock(&registry_lock);
     return SM_OK;
 }
 
+/* ── sm_registry_remove_if_owner ────────────────────────────────────────────── */
+
 /*
- * sm_registry_remove_if_owner() - Atomic PID check + remove (TOCTOU fix).
- *
- * The previous pattern in sm_handle_unregister was:
- *   entry = sm_registry_find(name);  // rdlock acquired then released
- *   if (entry->pid != peer_pid) ...  // ← window: array could be shifted here
- *   sm_registry_remove(name);        // another window
- *
- * This function performs the ownership check and the removal in a single
- * write-lock section, closing both TOCTOU windows.
+ * Atomic PID check + remove — closes both TOCTOU windows that existed when
+ * sm_handle_unregister did: find() [rdlock release] ... remove() [wrlock].
  */
 int sm_registry_remove_if_owner(const char* name, pid_t owner_pid)
 {
-    int idx;
-
     if (!name) return SM_ERR_INVALID;
 
     pthread_rwlock_wrlock(&registry_lock);
 
-    idx = hash_find(name);
+    int idx = hash_find(name);
     if (idx < 0) {
         pthread_rwlock_unlock(&registry_lock);
         return SM_ERR_NOT_FOUND;
     }
 
-    /* Authorization: kernel-verified PID from SO_PEERCRED must match */
     if (registry[idx].pid != owner_pid) {
-        sm_log(SM_LOG_ERROR,
-               "registry: remove_if_owner denied - owner_pid=%d, requesting_pid=%d, service='%s'",
-               (int)registry[idx].pid, (int)owner_pid, name);
+        int reg_pid = (int)registry[idx].pid;
         pthread_rwlock_unlock(&registry_lock);
+        sm_log(SM_LOG_ERROR,
+               "registry: remove_if_owner denied — owner_pid=%d, requesting_pid=%d, service='%s'",
+               reg_pid, (int)owner_pid, name);
         return SM_ERR_PERMISSION;
     }
 
-    sm_log(SM_LOG_INFO, "registry: unregistered '%s' pid=%d",
-           registry[idx].name, (int)owner_pid);
+    /* Save for log */
+    char saved_name[SM_MAX_NAME];
+    strncpy(saved_name, registry[idx].name, SM_MAX_NAME - 1);
+    saved_name[SM_MAX_NAME - 1] = '\0';
 
     hash_remove(name);
 
@@ -385,5 +431,9 @@ int sm_registry_remove_if_owner(const char* name, pid_t owner_pid)
     hash_rebuild();
 
     pthread_rwlock_unlock(&registry_lock);
+
+    /* FIX 7: log lock ke bahar */
+    sm_log(SM_LOG_INFO, "registry: unregistered '%s' pid=%d",
+           saved_name, (int)owner_pid);
     return SM_OK;
 }

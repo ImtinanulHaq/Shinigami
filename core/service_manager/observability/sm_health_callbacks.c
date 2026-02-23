@@ -68,19 +68,34 @@ int sm_health_callback_check(const char* service_name)
 
 void sm_health_callbacks_check_all(void)
 {
+    /* FIX: Pehle saari callbacks copy karo lock ke andar
+     * Phir lock chhoro, phir call karo
+     * Warna: callback khud register() call kare toh deadlock! */
+
+    sm_health_check_fn fns[MAX_CALLBACKS];
+    char names[MAX_CALLBACKS][64];
+    int count = 0;
+
+    /* Step 1: Lock ke andar sirf copy karo */
     pthread_mutex_lock(&cb_mutex);
-    
-    for (int i = 0; i < g_callback_count; i++) {
-        if (g_callbacks[i].fn) {
-            int result = g_callbacks[i].fn(g_callbacks[i].service_name);
+    count = g_callback_count;
+    for (int i = 0; i < count; i++) {
+        fns[i] = g_callbacks[i].fn;
+        strncpy(names[i], g_callbacks[i].service_name, 63);
+        names[i][63] = '\0';
+    }
+    pthread_mutex_unlock(&cb_mutex);
+    /* Step 2: Lock chhor di — ab koi bhi register/unregister kar sakta hai */
+
+    /* Step 3: Lock ke bahar callbacks call karo */
+    for (int i = 0; i < count; i++) {
+        if (fns[i]) {
+            int result = fns[i](names[i]);
             if (result < 0) {
-                sm_log(SM_LOG_WARN, "health: callback failed for '%s'",
-                       g_callbacks[i].service_name);
+                sm_log(SM_LOG_WARN, "health: callback failed for '%s'", names[i]);
             }
         }
     }
-    
-    pthread_mutex_unlock(&cb_mutex);
 }
 
 int sm_health_callback_unregister(const char* service_name)
