@@ -36,6 +36,7 @@
  * sm_cli.c lives in enterprise/ — sm_protocol.h is in infrastructure/
  */
 #include "../infrastructure/sm_protocol.h"
+#include "../security/sm_crypto.h"
 #include "sm_cli.h"
 
 #include <stdio.h>
@@ -54,8 +55,9 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/random.h>
 #include <sys/time.h>
+#include <sys/random.h>
+
 /* ── ANSI Colors ─────────────────────────────────────────────────────────────── */
 #define C_RESET    "\033[0m"
 #define C_BOLD     "\033[1m"
@@ -436,8 +438,6 @@ static uint32_t bankai_nonce(void)
  */
 static int bankai_open_socket(void)
 {
-    static int hmac_warned = 0;
-
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
         printf(C_RED "  [ERROR] socket(): %s\n" C_RESET, strerror(errno));
@@ -476,35 +476,138 @@ static int bankai_open_socket(void)
     }
 
 connected:
-    /*
-     * FIX 3 — one-time HMAC warning.
-     *
-     * Bankai sends hmac[32] = {0} (test mode / no shared key available here).
-     * If the server has HMAC enforcement active, every command will return
-     * SM_ERR_AUTH (-8).
-     *
-     * To enable authenticated mode: link sm_crypto.c, call sm_crypto_init(),
-     * replace the memset(hdr->hmac,0) in raw_transact() with sm_hmac_sha256().
-     */
-    if (!hmac_warned) {
-        printf(C_DIM
-               "  [NOTE] Running in test mode — HMAC field is zero.\n"
-               "         Commands will return SM_ERR_AUTH (-8) if the\n"
-               "         server has HMAC enforcement enabled.\n"
-               C_RESET);
-        hmac_warned = 1;
-    }
     return fd;
+}
+
+/* ── HMAC key loading ────────────────────────────────────────────────────────── */
+
+/*
+ * bankai_load_key() — read the shared HMAC key from disk.
+ *
+ * The Service Manager writes the key to SM_KEY_FILE on first run.
+ * We read it here so Bankai can sign every request correctly.
+ * Key is cached in g_hmac_key after the first successful load.
+ */
+
+/* Inline SHA-256 / HMAC-SHA256 — copied verbatim from sm_crypto.c so that
+ * Bankai can be compiled standalone without linking sm_crypto.o.            */
+#define ROTR32(x,n) (((x)>>(n))|((x)<<(32-(n))))
+#define CH(x,y,z)   (((x)&(y))^(~(x)&(z)))
+#define MAJ(x,y,z)  (((x)&(y))^((x)&(z))^((y)&(z)))
+#define SIGMA0(x)   (ROTR32(x, 2)^ROTR32(x,13)^ROTR32(x,22))
+#define SIGMA1(x)   (ROTR32(x, 6)^ROTR32(x,11)^ROTR32(x,25))
+#define GAMMA0(x)   (ROTR32(x, 7)^ROTR32(x,18)^((x)>> 3))
+#define GAMMA1(x)   (ROTR32(x,17)^ROTR32(x,19)^((x)>>10))
+
+static const uint32_t BK_SHA256_H0[8]={
+    0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
+    0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
+static const uint32_t BK_SHA256_K[64]={
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,
+    0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,
+    0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,
+    0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,
+    0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,
+    0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,
+    0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,
+    0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,
+    0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
+
+typedef struct { uint32_t s[8]; uint8_t b[64]; uint64_t bc; uint32_t bu; } bk_sha256_ctx;
+
+static void bk_sha256_compress(bk_sha256_ctx* c, const uint8_t blk[64]) {
+    uint32_t w[64],a,b,d,e,f,g,h,t1,t2; int i;
+    /* suppress unused warning for 'cc' variable name conflict */
+    uint32_t cc;
+    for(i=0;i<16;i++) w[i]=((uint32_t)blk[i*4]<<24)|((uint32_t)blk[i*4+1]<<16)|((uint32_t)blk[i*4+2]<<8)|(uint32_t)blk[i*4+3];
+    for(i=16;i<64;i++) w[i]=GAMMA1(w[i-2])+w[i-7]+GAMMA0(w[i-15])+w[i-16];
+    a=c->s[0];b=c->s[1];cc=c->s[2];d=c->s[3];e=c->s[4];f=c->s[5];g=c->s[6];h=c->s[7];
+    for(i=0;i<64;i++){t1=h+SIGMA1(e)+CH(e,f,g)+BK_SHA256_K[i]+w[i];t2=SIGMA0(a)+MAJ(a,b,cc);h=g;g=f;f=e;e=d+t1;d=cc;cc=b;b=a;a=t1+t2;}
+    c->s[0]+=a;c->s[1]+=b;c->s[2]+=cc;c->s[3]+=d;c->s[4]+=e;c->s[5]+=f;c->s[6]+=g;c->s[7]+=h;
+}
+static void bk_sha256_init(bk_sha256_ctx* c){memcpy(c->s,BK_SHA256_H0,32);c->bc=0;c->bu=0;}
+static void bk_sha256_update(bk_sha256_ctx* c,const uint8_t* d,size_t n){
+    c->bc+=(uint64_t)n*8;
+    for(size_t i=0;i<n;i++){c->b[c->bu++]=d[i];if(c->bu==64){bk_sha256_compress(c,c->b);c->bu=0;}}
+}
+static void bk_sha256_final(bk_sha256_ctx* c,uint8_t out[32]){
+    uint8_t p[64];uint64_t bc=c->bc;uint32_t ps=c->bu;int i;
+    memset(p,0,64);memcpy(p,c->b,c->bu);p[ps]=0x80;
+    if(ps>=56){bk_sha256_compress(c,p);memset(p,0,56);}
+    for(i=0;i<8;i++) p[56+i]=(uint8_t)(bc>>((7-i)*8));
+    bk_sha256_compress(c,p);
+    for(i=0;i<8;i++){out[i*4]=(uint8_t)(c->s[i]>>24);out[i*4+1]=(uint8_t)(c->s[i]>>16);out[i*4+2]=(uint8_t)(c->s[i]>>8);out[i*4+3]=(uint8_t)c->s[i];}
+    memset(c,0,sizeof(*c));
+}
+static void bk_hmac_sha256(const uint8_t* key,size_t kl,const uint8_t* data,size_t dl,uint8_t out[32]){
+    uint8_t kp[64],inner[32];bk_sha256_ctx ctx;size_t i;
+    memset(kp,0,64);
+    if(kl>64){bk_sha256_ctx hc;bk_sha256_init(&hc);bk_sha256_update(&hc,key,kl);bk_sha256_final(&hc,kp);}
+    else memcpy(kp,key,kl);
+    bk_sha256_init(&ctx);
+    for(i=0;i<64;i++) kp[i]^=0x36;
+    bk_sha256_update(&ctx,kp,64);bk_sha256_update(&ctx,data,dl);bk_sha256_final(&ctx,inner);
+    for(i=0;i<64;i++) kp[i]^=(0x36^0x5c);
+    bk_sha256_init(&ctx);bk_sha256_update(&ctx,kp,64);bk_sha256_update(&ctx,inner,32);bk_sha256_final(&ctx,out);
+    memset(kp,0,64);memset(inner,0,32);
+}
+
+/* Cached HMAC key — loaded once from disk */
+static uint8_t  g_hmac_key[SM_HMAC_KEY_SIZE];
+static int      g_hmac_key_loaded = 0;
+
+static int bankai_load_key(void)
+{
+    if (g_hmac_key_loaded) return 0;
+
+    const char* paths[] = {
+        "/run/servicemanager.key",
+        "/tmp/servicemanager.key",
+        NULL
+    };
+
+    for (int i = 0; paths[i]; i++) {
+        int fd = open(paths[i], O_RDONLY | O_CLOEXEC);
+        if (fd < 0) continue;
+
+        ssize_t n = read(fd, g_hmac_key, SM_HMAC_KEY_SIZE);
+        close(fd);
+
+        if (n == (ssize_t)SM_HMAC_KEY_SIZE) {
+            g_hmac_key_loaded = 1;
+            printf(C_GREEN "  [HMAC] Key loaded from %s "
+                           C_DIM "(first 4 bytes: %02x%02x%02x%02x)\n" C_RESET,
+                   paths[i],
+                   g_hmac_key[0], g_hmac_key[1],
+                   g_hmac_key[2], g_hmac_key[3]);
+            return 0;
+        }
+    }
+
+    printf(C_RED
+           "  [HMAC] Key not found at /run/servicemanager.key or /tmp/servicemanager.key\n"
+           "         Run Service Manager once as root to generate the key.\n"
+           C_RESET);
+    return -1;
 }
 
 /* ── FIX 2: Single raw_transact() — used by ALL protocol commands ────────────── */
 
 /*
- * raw_transact() — assemble header + payload, send to fd, receive reply.
+ * raw_transact() — assemble header + payload, sign with HMAC, send, receive.
+ *
+ * HMAC signing:
+ *   mac_input = header[0 .. SM_HDR_HMAC_OFFSET-1] || payload
+ *   HMAC-SHA256(key, mac_input) written into hdr->hmac[32]
  *
  * Returns bytes received (>= 0) on success, -1 on send/recv error.
- * Callers inspect the byte count to differentiate reply types
- * (e.g. sm_reply_t vs sm_lookup_reply_t for lookup).
  */
 static ssize_t raw_transact(int fd, uint16_t type,
                              const void* payload, size_t payload_len,
@@ -515,6 +618,10 @@ static ssize_t raw_transact(int fd, uint16_t type,
                C_RESET, payload_len, SM_MAX_PAYLOAD_SIZE);
         return -1;
     }
+
+    /* Load HMAC key if not already loaded */
+    if (!g_hmac_key_loaded && bankai_load_key() < 0)
+        return -1;
 
     size_t  total = sizeof(sm_hdr_t) + payload_len;
     uint8_t sbuf[sizeof(sm_hdr_t) + SM_MAX_PAYLOAD_SIZE];
@@ -528,9 +635,22 @@ static ssize_t raw_transact(int fd, uint16_t type,
     hdr->timestamp  = (uint32_t)time(NULL);
     hdr->client_pid = (uint32_t)getpid();
     hdr->nonce      = bankai_nonce();
-    /* hdr->hmac[32] left zero — test mode (see FIX 3 note in bankai_open_socket) */
+    /* hmac field stays zero until we compute it below */
 
     memcpy(sbuf + sizeof(sm_hdr_t), payload, payload_len);
+
+    /*
+     * Compute HMAC over:
+     *   header bytes [0 .. SM_HDR_HMAC_OFFSET-1]  (pre-hmac fields only)
+     *   + payload
+     * This matches exactly what sm_validate_header_hmac() verifies.
+     */
+    uint8_t mac_input[SM_HDR_HMAC_OFFSET + SM_MAX_PAYLOAD_SIZE];
+    size_t  mac_len = SM_HDR_HMAC_OFFSET + payload_len;
+    memcpy(mac_input,                    hdr,     SM_HDR_HMAC_OFFSET);
+    memcpy(mac_input + SM_HDR_HMAC_OFFSET, payload, payload_len);
+
+    bk_hmac_sha256(g_hmac_key, SM_HMAC_KEY_SIZE, mac_input, mac_len, hdr->hmac);
 
     if (send(fd, sbuf, total, MSG_NOSIGNAL) != (ssize_t)total) {
         printf(C_RED "  [ERROR] send failed: %s\n" C_RESET, strerror(errno));

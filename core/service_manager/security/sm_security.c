@@ -228,7 +228,48 @@ int sm_setup_seccomp(void)
         ALLOW_SYSCALL(SYS_chmod),
         ALLOW_SYSCALL(SYS_fchmod),
 
-        /* Default: kill the entire process if an unlisted syscall is attempted */
+        /* signalfd4 — used by sm_run() for signal-safe event loop */
+        ALLOW_SYSCALL(SYS_signalfd4),
+
+        /* glibc 2.35+: rseq registered on every thread start.
+         * Without this, pthread_create is killed immediately. */
+        ALLOW_SYSCALL(SYS_rseq),
+
+        /* clone3 — newer glibc uses clone3 instead of clone for pthread_create */
+        ALLOW_SYSCALL(SYS_clone3),
+
+        /* madvise — glibc malloc uses MADV_DONTNEED on free */
+        ALLOW_SYSCALL(SYS_madvise),
+
+        /* pipe2 — used by glibc internals and pthread */
+        ALLOW_SYSCALL(SYS_pipe2),
+
+        /* pread64 / pwrite64 — glibc internals and log rotation */
+        ALLOW_SYSCALL(SYS_pread64),
+        ALLOW_SYSCALL(SYS_pwrite64),
+
+        /* getpeername — SO_PEERCRED peer credential checks */
+        ALLOW_SYSCALL(SYS_getpeername),
+
+        /* uid/gid getters — verified after privilege drop */
+        ALLOW_SYSCALL(SYS_getuid),
+        ALLOW_SYSCALL(SYS_geteuid),
+        ALLOW_SYSCALL(SYS_getgid),
+        ALLOW_SYSCALL(SYS_getegid),
+
+        /* ioctl — terminal and socket operations */
+        ALLOW_SYSCALL(SYS_ioctl),
+
+        /* prctl — NO_NEW_PRIVS, seccomp itself, thread name */
+        ALLOW_SYSCALL(SYS_prctl),
+
+        /* tgkill — pthread_cancel and glibc internal signal delivery */
+        ALLOW_SYSCALL(SYS_tgkill),
+
+        /* newfstatat — glibc stat() wrapper on newer kernels */
+        ALLOW_SYSCALL(SYS_newfstatat),
+
+        /* Default: kill process on any unlisted syscall */
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
     };
 
