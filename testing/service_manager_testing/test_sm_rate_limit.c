@@ -1,6 +1,6 @@
 /* Unit tests for sm_rate_limit - Rate limiting operations */
 #include "unity.h"
-#include "../../core/service_manager/security/sm_rate_limit.h"
+#include "../../dev/core/service_manager/security/sm_rate_limit.h"
 #include <unistd.h>
 #include <string.h>
 #include <time.h>

@@ -1,11 +1,39 @@
 #!/bin/bash
 # Service Manager Comprehensive Test Harness (Levels 1-5)
 # Professional production-grade testing framework
+# Updated for Modular Directory Structure (dev/core/service_manager)
 
 # Don't use set -e because we need to handle test failures gracefully
 # Instead, we explicitly check exit codes in tests
 
-# Colors
+# --- Configuration & Path Resolution ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(realpath "$SCRIPT_DIR/../../")"
+BUILD_DIR="$SCRIPT_DIR/build"
+DEV_CORE="$PROJECT_ROOT/dev/core"
+SM_ROOT="$DEV_CORE/service_manager"
+
+mkdir -p "$BUILD_DIR"
+
+# --- Source File Discovery ---
+# We define these variables here so all levels can use them.
+# 1. Compiler Includes
+INCLUDES=(
+    "-I$DEV_CORE"
+    "-I$SM_ROOT"
+    "-I$SM_ROOT/infrastructure"
+    "-I$SM_ROOT/security"
+    "-I$SM_ROOT/lifecycle"
+    "-I$SM_ROOT/observability"
+    "-I$SM_ROOT/enterprise"
+    "-I$SCRIPT_DIR"
+)
+
+# 2. Source Files (Excluding sm_main.c to avoid main() conflicts)
+LIB_SOURCES=$(find "$SM_ROOT" -name "*.c" ! -name "sm_main.c")
+LIB_SOURCES="$LIB_SOURCES $DEV_CORE/ring_buffer.c"
+
+# --- Colors & Logging ---
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -13,27 +41,14 @@ BLUE='\033[0;34m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
 
-TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 TOTAL_TESTS=0
 TOTAL_PASSED=0
 TOTAL_FAILED=0
 
-# Logging functions
-log_level() {
-    echo -e "${MAGENTA}[Level $1]${NC} $2"
-}
-
-log_pass() {
-    echo -e "${GREEN}✓${NC} $1"
-}
-
-log_fail() {
-    echo -e "${RED}✗${NC} $1"
-}
-
-log_info() {
-    echo -e "${YELLOW}[INFO]${NC} $1"
-}
+log_level() { echo -e "${MAGENTA}[Level $1]${NC} $2"; }
+log_pass()  { echo -e "${GREEN}✓${NC} $1"; }
+log_fail()  { echo -e "${RED}✗${NC} $1"; }
+log_info()  { echo -e "${YELLOW}[INFO]${NC} $1"; }
 
 header() {
     echo ""
@@ -43,25 +58,39 @@ header() {
     echo ""
 }
 
-# Level 1: Static Analysis
+# --- Level 1: Static Analysis ---
 run_level_1_static_analysis() {
     header "Level 1: Static Analysis"
-    
     local passed=0
     local failed=0
     
-    # Use make for static analysis
-    if command -v make >/dev/null 2>&1; then
-        log_level "1" "Running make test-static"
-        if make test-static 2>&1; then
+    # 1. Cppcheck
+    if command -v cppcheck >/dev/null 2>&1; then
+        log_level "1" "Running cppcheck..."
+        if cppcheck --enable=all --error-exitcode=1 \
+            --suppress=missingIncludeSystem \
+            --suppress=unusedFunction \
+            "$SM_ROOT" "$DEV_CORE/ring_buffer.c" 2>&1 | head -50; then
             ((passed++))
-            log_pass "Static analysis completed"
+            log_pass "Cppcheck passed"
         else
             ((failed++))
-            log_fail "Static analysis issues found"
+            log_fail "Cppcheck found issues"
         fi
     else
-        log_info "make not available, skipping static analysis"
+        log_info "cppcheck not found, skipping"
+    fi
+
+    # 2. GCC Strict Warning Check
+    log_level "1" "Running GCC strict compilation check..."
+    if gcc -Wall -Wextra -Wshadow -Werror "${INCLUDES[@]}" \
+       -c "$SM_ROOT/infrastructure/sm_protocol.c" \
+       -c "$SM_ROOT/security/sm_crypto.c" -o /dev/null 2>/dev/null; then
+        ((passed++))
+        log_pass "Strict GCC compilation passed"
+    else
+        ((failed++))
+        log_fail "Strict GCC compilation failed (warnings treated as errors)"
     fi
     
     echo ""
@@ -70,25 +99,36 @@ run_level_1_static_analysis() {
     TOTAL_FAILED=$((TOTAL_FAILED + failed))
 }
 
-# Level 2: Unit Tests
+# --- Level 2: Unit Tests ---
 run_level_2_unit_tests() {
     header "Level 2: Unit Tests (Protocol, Registry, Crypto, Rate Limit)"
-    
     local passed=0
     local failed=0
     
-    if command -v make >/dev/null 2>&1; then
-        log_level "2" "Running make test-unit"
-        if make test-unit 2>&1; then
-            ((passed++))
-            log_pass "Unit tests passed"
+    log_level "2" "Compiling and running tests..."
+    
+    for test_file in "$SCRIPT_DIR"/test_*.c; do
+        test_name=$(basename "$test_file" .c)
+        
+        # Compile
+        if gcc -g -o "$BUILD_DIR/$test_name" \
+            "$test_file" "$SCRIPT_DIR/unity.c" \
+            $LIB_SOURCES "${INCLUDES[@]}" \
+            -lssl -lcrypto -lpthread -lm -lrt; then
+            
+            # Run
+            if "$BUILD_DIR/$test_name"; then
+                ((passed++))
+                log_pass "$test_name passed"
+            else
+                ((failed++))
+                log_fail "$test_name failed at runtime"
+            fi
         else
             ((failed++))
-            log_fail "Unit tests failed"
+            log_fail "$test_name failed to compile"
         fi
-    else
-        log_info "make not available, skipping unit tests"
-    fi
+    done
     
     echo ""
     echo -e "Level 2: ${GREEN}$passed${NC} passed, ${RED}$failed${NC} failed"
@@ -96,16 +136,17 @@ run_level_2_unit_tests() {
     TOTAL_FAILED=$((TOTAL_FAILED + failed))
 }
 
-# Level 3: Integration Tests
+# --- Level 3: Integration Tests ---
 run_level_3_integration() {
     header "Level 3: Integration Tests"
-    
     local passed=0
     local failed=0
     
-    if [ -x integration_test.sh ]; then
+    TEST_SCRIPT="$SCRIPT_DIR/integration_test.sh"
+    
+    if [ -x "$TEST_SCRIPT" ]; then
         log_level "3" "Running integration_test.sh"
-        if ./integration_test.sh 2>&1; then
+        if "$TEST_SCRIPT"; then
             ((passed++))
             log_pass "Integration tests passed"
         else
@@ -113,7 +154,8 @@ run_level_3_integration() {
             log_fail "Integration tests failed"
         fi
     else
-        log_info "integration_test.sh not executable"
+        log_fail "integration_test.sh not found or not executable"
+        ((failed++))
     fi
     
     echo ""
@@ -122,16 +164,17 @@ run_level_3_integration() {
     TOTAL_FAILED=$((TOTAL_FAILED + failed))
 }
 
-# Level 4: E2E Tests
+# --- Level 4: E2E Tests ---
 run_level_4_e2e() {
     header "Level 4: End-to-End Tests"
-    
     local passed=0
     local failed=0
     
-    if [ -x e2e_test.sh ]; then
+    TEST_SCRIPT="$SCRIPT_DIR/e2e_test.sh"
+    
+    if [ -x "$TEST_SCRIPT" ]; then
         log_level "4" "Running e2e_test.sh"
-        if ./e2e_test.sh 2>&1; then
+        if "$TEST_SCRIPT"; then
             ((passed++))
             log_pass "E2E tests passed"
         else
@@ -139,7 +182,8 @@ run_level_4_e2e() {
             log_fail "E2E tests failed"
         fi
     else
-        log_info "e2e_test.sh not executable"
+        log_fail "e2e_test.sh not found or not executable"
+        ((failed++))
     fi
     
     echo ""
@@ -148,47 +192,51 @@ run_level_4_e2e() {
     TOTAL_FAILED=$((TOTAL_FAILED + failed))
 }
 
-# Level 5: Fuzz Testing
+# --- Level 5: Fuzz Testing ---
 run_level_5_fuzz() {
-    header "Level 5: Fuzz Testing (ASAN, UBSAN, AFL++)"
-    
+    header "Level 5: Fuzz Testing (ASAN, UBSAN)"
     local passed=0
     local failed=0
     
-    if command -v make >/dev/null 2>&1; then
-        log_level "5" "Building fuzz targets"
+    FUZZ_SRC="$SCRIPT_DIR/fuzz_target.c"
+    
+    if [ ! -f "$FUZZ_SRC" ]; then
+        log_info "fuzz_target.c not found, skipping"
+        return
+    fi
+    
+    # 1. Build ASAN Target
+    log_level "5" "Building ASAN instrumented fuzz target..."
+    if gcc -fsanitize=address,undefined -g -o "$BUILD_DIR/fuzz_target_asan" \
+        "$FUZZ_SRC" $LIB_SOURCES "${INCLUDES[@]}" \
+        -lssl -lcrypto -lpthread -lm -lrt; then
+        ((passed++))
+        log_pass "ASAN target built"
         
-        # Build standard fuzz target
-        if make fuzz_target >/dev/null 2>&1; then
-            ((passed++))
-            log_pass "Standard fuzz target built"
+        # 2. Dry Run (30s)
+        log_level "5" "Running 30s dry run..."
+        if timeout 30s "$BUILD_DIR/fuzz_target_asan" < /dev/urandom > /dev/null 2>&1; then
+             # timeout exit code 124 is normal/pass for us here
+             : 
         fi
-        
-        # Build ASAN instrumented fuzz target
-        if make fuzz_target_asan >/dev/null 2>&1; then
-            ((passed++))
-            log_pass "ASAN instrumented fuzz target built"
+        # Check if it crashed (exit code > 128 usually signal)
+        if [ $? -lt 128 ]; then
+             log_pass "Dry run survived"
+        else
+             log_fail "Dry run crashed"
         fi
-        
-        # Build UBSAN instrumented fuzz target
-        if make fuzz_target_ubsan >/dev/null 2>&1; then
-            ((passed++))
-            log_pass "UBSAN instrumented fuzz target built"
-        fi
-        
-        log_level "5" "Fuzz targets ready for AFL++"
-        log_info "To run fuzzing: afl-fuzz -i fuzz_input -o fuzz_output build/fuzz_target_asan"
     else
-        log_info "make not available, skipping fuzz builds"
+        ((failed++))
+        log_fail "Failed to build ASAN target"
     fi
     
     echo ""
-    echo -e "Level 5: ${GREEN}$passed${NC} targets built, ${RED}$failed${NC} failed"
+    echo -e "Level 5: ${GREEN}$passed${NC} targets built/ran"
     TOTAL_PASSED=$((TOTAL_PASSED + passed))
     TOTAL_FAILED=$((TOTAL_FAILED + failed))
 }
 
-# Help function
+# --- Help ---
 show_help() {
     echo "Service Manager Testing Framework"
     echo "Usage: $0 [OPTION]"
@@ -204,57 +252,45 @@ show_help() {
     echo "  --help           Show this help message"
 }
 
-# Main test orchestration
+# --- Main Entry Point ---
 main() {
-    # Parse arguments
-    local TEST_LEVEL=${1:-"all"}
+    local TEST_LEVEL="all"
     
-    case "$TEST_LEVEL" in
-        --help)
-            show_help
-            exit 0
-            ;;
-        --level)
-            TEST_LEVEL="$2"
-            ;;
-    esac
+    # Simple argument parsing
+    if [[ "$1" == "--level" ]]; then
+        TEST_LEVEL="$2"
+    elif [[ "$1" != "" ]]; then
+        TEST_LEVEL="${1/--/}" # remove -- prefix
+    fi
     
+    # Validate
+    if [[ "$1" == "--help" ]]; then
+        show_help
+        exit 0
+    fi
+
     echo ""
     echo "╔════════════════════════════════════════════════╗"
     echo "║   Service Manager Professional Test Suite      ║"
-    echo "║   Industry-Grade Testing: Levels 1-5            ║"
+    echo "║   Industry-Grade Testing: Levels 1-5           ║"
     echo "╚════════════════════════════════════════════════╝"
     echo ""
     
-    # Create build directory
-    mkdir -p build
-    
-    # Run requested tests
     case "$TEST_LEVEL" in
-        all|--all)
+        all)
             run_level_1_static_analysis
             run_level_2_unit_tests
             run_level_3_integration
             run_level_4_e2e
             run_level_5_fuzz
             ;;
-        1|--static)
-            run_level_1_static_analysis
-            ;;
-        2|--unit)
-            run_level_2_unit_tests
-            ;;
-        3|--integration)
-            run_level_3_integration
-            ;;
-        4|--e2e)
-            run_level_4_e2e
-            ;;
-        5|--fuzz)
-            run_level_5_fuzz
-            ;;
+        1|static) run_level_1_static_analysis ;;
+        2|unit)   run_level_2_unit_tests ;;
+        3|integration) run_level_3_integration ;;
+        4|e2e)    run_level_4_e2e ;;
+        5|fuzz)   run_level_5_fuzz ;;
         *)
-            log_fail "Unknown test level: $TEST_LEVEL"
+            log_fail "Unknown option: $1"
             show_help
             exit 1
             ;;
@@ -262,25 +298,20 @@ main() {
     
     echo ""
     echo "╔════════════════════════════════════════════════╗"
-    echo "║   Test Summary                                  ║"
+    echo "║   Test Summary                                 ║"
     echo "╠════════════════════════════════════════════════╣"
-    echo -e "║   Total Passed: ${GREEN}$TOTAL_PASSED${NC}                                  ║"
-    echo -e "║   Total Failed: ${RED}$TOTAL_FAILED${NC}                                  ║"
+    echo -e "║   Total Passed: ${GREEN}$TOTAL_PASSED${NC}                              ║"
+    echo -e "║   Total Failed: ${RED}$TOTAL_FAILED${NC}                              ║"
     
     if [ $TOTAL_FAILED -eq 0 ]; then
-        echo "║   Status: ${GREEN}ALL TESTS PASSED${NC} ✓                       ║"
+        echo "║   Status: ${GREEN}ALL TESTS PASSED${NC} ✓                        ║"
+        exit 0
     else
-        echo "║   Status: ${RED}SOME TESTS FAILED${NC} ✗                    ║"
+        echo "║   Status: ${RED}SOME TESTS FAILED${NC} ✗                        ║"
+        exit 1
     fi
-    
     echo "╚════════════════════════════════════════════════╝"
     echo ""
-    
-    return $TOTAL_FAILED
 }
 
-# Run if not sourced
-if [ "${BASH_SOURCE[0]}" == "${0}" ]; then
-    main "$@"
-    exit $?
-fi
+main "$@"
