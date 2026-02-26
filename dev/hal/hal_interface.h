@@ -1,184 +1,285 @@
+/**
+ * @file hal_interface.h
+ * @brief Hardware Abstraction Layer — common device interface.
+ *
+ * Every hardware subsystem (audio, camera, sensor, GPIO) is represented
+ * as an @ref hw_device_t.  Callers interact exclusively through the
+ * @ref hw_device_ops_t vtable, the registry API, and the lifecycle
+ * helpers declared here.  No subsystem-specific header needs to be
+ * included by code that only consumes devices.
+ */
+
 #ifndef HAL_INTERFACE_H
 #define HAL_INTERFACE_H
 
-#include <stdint.h>
-#include <stddef.h>
 #include <pthread.h>
+#include <stdatomic.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/types.h>
 
-// ══════════════════════════════════════════════════════════════════════════════
-// HAL (Hardware Abstraction Layer) - Common Interface
-// 
-// Purpose: Provides unified interface for all hardware devices
-// Benefits:
-// - Services don't need to know hardware specifics (ALSA vs OSS, V4L2 vs V4L1)
-// - Easy to swap hardware implementations
-// - Consistent error handling and lifecycle management
-// ══════════════════════════════════════════════════════════════════════════════
+/* ── version ──────────────────────────────────────────────────────────── */
 
-// HAL version for compatibility checking
-#define HAL_VERSION_MAJOR  1
-#define HAL_VERSION_MINOR  0
-#define HAL_VERSION_PATCH  0
+#define HAL_VERSION_MAJOR 2
+#define HAL_VERSION_MINOR 0
+#define HAL_VERSION_PATCH 0
 
-// Maximum device name length
-#define HAL_MAX_NAME_LEN   64
+/** Packs major/minor/patch into a single uint32 for fast comparison. */
+#define HAL_VERSION_PACK(maj, min, pat)                                        \
+  (((uint32_t)(maj) << 16) | ((uint32_t)(min) << 8) | (uint32_t)(pat))
 
-// Common error codes (negative values)
+#define HAL_CURRENT_VERSION                                                    \
+  HAL_VERSION_PACK(HAL_VERSION_MAJOR, HAL_VERSION_MINOR, HAL_VERSION_PATCH)
+
+/* ── limits ───────────────────────────────────────────────────────────── */
+
+/** Maximum length of a device name, including the null terminator. */
+#define HAL_MAX_NAME_LEN 64U
+
+/** Convenience: number of elements in a statically sized array. */
+#define HAL_ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+
+/* ── error codes ──────────────────────────────────────────────────────── */
+
+/**
+ * @brief Unified error codes returned by all HAL functions.
+ *
+ * Negative values signal errors; zero means success.  Positive return
+ * values from read/write operations carry the byte count.
+ */
 typedef enum {
-    HAL_SUCCESS           =  0,   // Operation successful
-    HAL_ERROR_GENERIC     = -1,   // Generic error
-    HAL_ERROR_NO_DEVICE   = -2,   // Device not found
-    HAL_ERROR_BUSY        = -3,   // Device busy
-    HAL_ERROR_IO          = -4,   // I/O error
-    HAL_ERROR_INVALID     = -5,   // Invalid parameter
-    HAL_ERROR_NO_MEMORY   = -6,   // Out of memory
-    HAL_ERROR_TIMEOUT     = -7,   // Operation timeout
-    HAL_ERROR_NOT_SUPPORT = -8,   // Operation not supported
-    HAL_ERROR_PERMISSION  = -9,   // Permission denied
+  HAL_SUCCESS = 0,
+  HAL_ERROR_GENERIC = -1,
+  HAL_ERROR_NO_DEVICE = -2,
+  HAL_ERROR_BUSY = -3,
+  HAL_ERROR_IO = -4,
+  HAL_ERROR_INVALID = -5,
+  HAL_ERROR_NO_MEMORY = -6,
+  HAL_ERROR_TIMEOUT = -7,
+  HAL_ERROR_NOT_SUPPORT = -8,
+  HAL_ERROR_PERMISSION = -9,
 } hal_error_t;
 
-// Device types
+/* ── device classification ────────────────────────────────────────────── */
+
+/**
+ * @brief Broad category of a hardware device.
+ */
 typedef enum {
-    HAL_DEVICE_TYPE_AUDIO   = 0x01,
-    HAL_DEVICE_TYPE_SENSOR  = 0x02,
-    HAL_DEVICE_TYPE_CAMERA  = 0x03,
-    HAL_DEVICE_TYPE_GPIO    = 0x04,
-    HAL_DEVICE_TYPE_DISPLAY = 0x05,
+  HAL_DEVICE_TYPE_AUDIO = 0x01,
+  HAL_DEVICE_TYPE_SENSOR = 0x02,
+  HAL_DEVICE_TYPE_CAMERA = 0x03,
+  HAL_DEVICE_TYPE_GPIO = 0x04,
+  HAL_DEVICE_TYPE_DISPLAY = 0x05,
 } hal_device_type_t;
 
-// Device state
+/**
+ * @brief Lifecycle state of a hardware device.
+ *
+ * Valid transitions:
+ *   CLOSED → OPEN → ACTIVE → OPEN → CLOSED
+ * Any state may transition to ERROR on hardware fault.
+ */
 typedef enum {
-    HAL_STATE_CLOSED   = 0,  // Device closed
-    HAL_STATE_OPEN     = 1,  // Device open but not active
-    HAL_STATE_ACTIVE   = 2,  // Device active (streaming, recording, etc)
-    HAL_STATE_ERROR    = 3,  // Device in error state
+  HAL_STATE_CLOSED = 0,
+  HAL_STATE_OPEN = 1,
+  HAL_STATE_ACTIVE = 2,
+  HAL_STATE_ERROR = 3,
 } hal_device_state_t;
 
-// Forward declaration
+/* ── forward declaration ──────────────────────────────────────────────── */
+
 struct hw_device;
 
-// Common device operations (function pointers)
+/* ── vtable ───────────────────────────────────────────────────────────── */
+
+/**
+ * @brief Function-pointer table that defines device behaviour.
+ *
+ * Every HAL implementation populates one static instance of this struct
+ * and stores its address in @ref hw_device_t::ops.  This is the C
+ * equivalent of a C++ virtual-method table.
+ *
+ * Return conventions:
+ *   - open / close / start / stop / control / get_info: 0 on success,
+ *     negative HAL_ERROR_* on failure.
+ *   - read / write: bytes transferred (>0) on success, negative
+ *     HAL_ERROR_* on failure.
+ */
 typedef struct {
-    // Open device
-    // Returns: 0 on success, negative error code on failure
-    int (*open)(struct hw_device* dev);
-    
-    // Close device
-    // Returns: 0 on success, negative error code on failure
-    int (*close)(struct hw_device* dev);
-    
-    // Start device operation (streaming, recording, etc)
-    // Returns: 0 on success, negative error code on failure
-    int (*start)(struct hw_device* dev);
-    
-    // Stop device operation
-    // Returns: 0 on success, negative error code on failure
-    int (*stop)(struct hw_device* dev);
-    
-    // Read data from device
-    // buf: buffer to read into
-    // size: buffer size
-    // Returns: number of bytes read, or negative error code
-    ssize_t (*read)(struct hw_device* dev, void* buf, size_t size);
-    
-    // Write data to device
-    // buf: buffer to write from
-    // size: data size
-    // Returns: number of bytes written, or negative error code
-    ssize_t (*write)(struct hw_device* dev, const void* buf, size_t size);
-    
-    // Device-specific control (ioctl-like)
-    // cmd: command code
-    // arg: command argument
-    // Returns: 0 on success, negative error code on failure
-    int (*control)(struct hw_device* dev, uint32_t cmd, void* arg);
-    
-    // Get device status/info
-    // Returns: 0 on success, negative error code on failure
-    int (*get_info)(struct hw_device* dev, void* info);
-    
+  int (*open)(struct hw_device *device_ptr);
+  int (*close)(struct hw_device *device_ptr);
+  int (*start)(struct hw_device *device_ptr);
+  int (*stop)(struct hw_device *device_ptr);
+  ssize_t (*read)(struct hw_device *device_ptr, void *data_buffer,
+                  size_t buffer_size);
+  ssize_t (*write)(struct hw_device *device_ptr, const void *data_buffer,
+                   size_t data_size);
+  int (*control)(struct hw_device *device_ptr, uint32_t control_command,
+                 void *command_arg);
+  int (*get_info)(struct hw_device *device_ptr, void *info_out);
 } hw_device_ops_t;
 
-// Common hardware device structure
+/* ── core device struct ───────────────────────────────────────────────── */
+
+/**
+ * @brief Base descriptor shared by every hardware device in the HAL.
+ *
+ * Each subsystem-specific HAL allocates one of these, fills the common
+ * fields via @ref hal_device_init, then attaches its own private data
+ * through @ref priv and its vtable through @ref ops.
+ *
+ * Thread safety:
+ *   @ref lock is a reader-writer lock.  Data-path operations (read,
+ *   write) should acquire the read side; state-changing operations
+ *   (control, open, close) must acquire the write side.
+ *
+ *   @ref ref_count is managed with C11 atomics and must never be
+ *   manipulated directly — use @ref hal_device_ref / @ref hal_device_unref.
+ */
 typedef struct hw_device {
-    // Device metadata
-    char                name[HAL_MAX_NAME_LEN];  // Device name
-    hal_device_type_t   type;                    // Device type
-    uint32_t            version;                 // HAL version
-    hal_device_state_t  state;                   // Current state
-    
-    // Device file descriptor (if applicable)
-    int                 fd;                      // -1 if not used
-    
-    // Thread safety
-    pthread_mutex_t     lock;                    // Mutex for thread safety
-    
-    // Common operations
-    const hw_device_ops_t* ops;                  // Function pointers
-    
-    // Private device-specific data
-    void*               priv;                    // Implementation-specific data
-    
-    // Reference counting for proper cleanup
-    int                 ref_count;               // Reference count
-    
+  char name[HAL_MAX_NAME_LEN];
+  hal_device_type_t type;
+  uint32_t version;
+  hal_device_state_t state;
+  int fd;
+  pthread_rwlock_t lock;
+  const hw_device_ops_t *ops;
+  void (*cleanup)(struct hw_device *device_ptr);
+  void *priv;
+  atomic_int ref_count;
 } hw_device_t;
 
-// ══════════════════════════════════════════════════════════════════════════════
-// COMMON DEVICE MANAGEMENT FUNCTIONS
-// ══════════════════════════════════════════════════════════════════════════════
+/* ── lifecycle ────────────────────────────────────────────────────────── */
 
-// Initialize a hardware device structure
-// dev: device structure to initialize
-// name: device name
-// type: device type
-// Returns: 0 on success, negative error code on failure
-int hal_device_init(hw_device_t* dev, const char* name, hal_device_type_t type);
+/**
+ * @brief Zero-initialise and populate the common fields of a device struct.
+ *
+ * Must be called once after the caller allocates a @ref hw_device_t.
+ * Initialises the embedded reader-writer lock and sets ref_count to 1.
+ *
+ * @param device_ptr   Pointer to caller-allocated hw_device_t.
+ * @param device_name  Null-terminated name string (max HAL_MAX_NAME_LEN-1).
+ * @param device_type  Category classification.
+ * @return HAL_SUCCESS, or HAL_ERROR_INVALID if any pointer is NULL,
+ *         or HAL_ERROR_GENERIC if pthread_rwlock_init fails.
+ */
+int hal_device_init(hw_device_t *device_ptr, const char *device_name,
+                    hal_device_type_t device_type);
 
-// Destroy a hardware device structure (cleanup)
-// dev: device to destroy
-void hal_device_destroy(hw_device_t* dev);
+/**
+ * @brief Destroy the reader-writer lock embedded in a device struct.
+ *
+ * Does NOT free @ref hw_device_t::priv — that is the responsibility of
+ * the @ref hw_device_t::cleanup callback set by each HAL implementation.
+ * Does NOT call free() on @p device_ptr itself.
+ *
+ * @param device_ptr  Device whose lock is to be destroyed.
+ */
+void hal_device_destroy(hw_device_t *device_ptr);
 
-// Increment reference count (thread-safe)
-void hal_device_ref(hw_device_t* dev);
+/**
+ * @brief Increment the reference count of a device (thread-safe).
+ *
+ * @param device_ptr  Target device; no-op if NULL.
+ */
+void hal_device_ref(hw_device_t *device_ptr);
 
-// Decrement reference count, destroy if reaches 0 (thread-safe)
-void hal_device_unref(hw_device_t* dev);
+/**
+ * @brief Decrement the reference count; destroy device when count reaches 0.
+ *
+ * When the count hits zero this function:
+ *   1. Stops and closes the device if still active.
+ *   2. Calls @ref hw_device_t::cleanup to free private data.
+ *   3. Calls @ref hal_device_destroy to release the rwlock.
+ *   4. Calls free() on @p device_ptr.
+ *
+ * @param device_ptr  Target device; no-op if NULL.
+ */
+void hal_device_unref(hw_device_t *device_ptr);
 
-// Lock device for exclusive access
-void hal_device_lock(hw_device_t* dev);
+/**
+ * @brief Acquire the write (exclusive) side of the device lock.
+ * @param device_ptr  Target device; no-op if NULL.
+ */
+void hal_device_lock(hw_device_t *device_ptr);
 
-// Unlock device
-void hal_device_unlock(hw_device_t* dev);
+/**
+ * @brief Acquire the read (shared) side of the device lock.
+ * @param device_ptr  Target device; no-op if NULL.
+ */
+void hal_device_rdlock(hw_device_t *device_ptr);
 
-// Convert error code to string
-const char* hal_error_string(hal_error_t error);
+/**
+ * @brief Release whichever side of the device lock is held.
+ * @param device_ptr  Target device; no-op if NULL.
+ */
+void hal_device_unlock(hw_device_t *device_ptr);
 
-// Get HAL version
-void hal_get_version(int* major, int* minor, int* patch);
+/* ── utilities ────────────────────────────────────────────────────────── */
 
-// ══════════════════════════════════════════════════════════════════════════════
-// DEVICE REGISTRY (optional - for managing multiple devices)
-// ══════════════════════════════════════════════════════════════════════════════
+/**
+ * @brief Return a human-readable string for a HAL error code.
+ * @param error_code  One of the @ref hal_error_t values.
+ * @return Static string; never NULL.
+ */
+const char *hal_error_string(hal_error_t error_code);
 
-// Register a device in the global registry
-// dev: device to register
-// Returns: 0 on success, negative error code on failure
-int hal_device_register(hw_device_t* dev);
+/**
+ * @brief Fill caller-supplied integers with the HAL version numbers.
+ * @param major_out  Receives major version (may be NULL).
+ * @param minor_out  Receives minor version (may be NULL).
+ * @param patch_out  Receives patch version (may be NULL).
+ */
+void hal_get_version(int *major_out, int *minor_out, int *patch_out);
 
-// Unregister a device from the global registry
-// dev: device to unregister
-void hal_device_unregister(hw_device_t* dev);
+/* ── device registry ──────────────────────────────────────────────────── */
 
-// Find a device by name
-// name: device name
-// Returns: device pointer or NULL if not found
-hw_device_t* hal_device_find(const char* name);
+/**
+ * @brief Add a device to the global name registry.
+ *
+ * Increments @p device_ptr's reference count on success so the registry
+ * holds its own reference.  Fails with HAL_ERROR_BUSY if a device with
+ * the same name is already registered.
+ *
+ * @param device_ptr  Fully initialised device to register.
+ * @return HAL_SUCCESS, HAL_ERROR_INVALID, HAL_ERROR_BUSY, or
+ *         HAL_ERROR_NO_MEMORY.
+ */
+int hal_device_register(hw_device_t *device_ptr);
 
-// List all registered devices
-// devices: array to fill with device pointers
-// max_count: maximum number of devices to return
-// Returns: number of devices found
-int hal_device_list(hw_device_t** devices, int max_count);
+/**
+ * @brief Remove a device from the global name registry.
+ *
+ * Decrements the registry's reference; the device is destroyed if the
+ * count reaches zero.
+ *
+ * @param device_ptr  Device to unregister; no-op if not found.
+ */
+void hal_device_unregister(hw_device_t *device_ptr);
 
-#endif // HAL_INTERFACE_H
+/**
+ * @brief Look up a device by name and return it with an incremented refcount.
+ *
+ * Caller must call @ref hal_device_unref when finished with the returned
+ * pointer.
+ *
+ * @param device_name  Null-terminated name to search for.
+ * @return Pointer to device (refcount incremented), or NULL if not found.
+ */
+hw_device_t *hal_device_find(const char *device_name);
+
+/**
+ * @brief Populate an array with pointers to all registered devices.
+ *
+ * Each returned pointer has its reference count incremented.  Callers
+ * must call @ref hal_device_unref on every returned pointer when done.
+ *
+ * @param devices_out  Caller-allocated array to fill.
+ * @param max_devices  Capacity of @p devices_out.
+ * @return Number of devices written (may be less than total if
+ *         @p max_devices is too small).
+ */
+int hal_device_list(hw_device_t **devices_out, int max_devices);
+
+#endif /* HAL_INTERFACE_H */

@@ -1,105 +1,176 @@
+/**
+ * @file sensor_hal.h
+ * @brief Sensor HAL — Linux IIO subsystem interface.
+ *
+ * Supports 3-axis inertial sensors (accelerometer, gyroscope, magnetometer)
+ * and single-value environmental sensors (temperature, pressure, etc.).
+ *
+ * Two read modes are available and selected at open time:
+ *   - Buffer mode (preferred): reads from /dev/iio:deviceN — one syscall per
+ *     sample, hardware-stamped timestamp, atomic multi-channel read.
+ *   - Sysfs fallback: reads each axis from /sys/bus/iio/devices/.../in_*_raw —
+ *     three open/read/close cycles per 3-axis sample, software timestamp.
+ *
+ * Buffer mode is activated by setting enable_buffer = 1 in the configuration.
+ */
+
 #ifndef SENSOR_HAL_H
 #define SENSOR_HAL_H
 
 #include "hal_interface.h"
 
-// ══════════════════════════════════════════════════════════════════════════════
-// SENSOR HAL - IIO (Industrial I/O) Subsystem Implementation
-// 
-// Purpose: Provides unified interface for various sensors
-// Features:
-// - Accelerometer (3-axis motion)
-// - Gyroscope (3-axis rotation)
-// - Magnetometer (3-axis magnetic field)
-// - Temperature, pressure, proximity sensors
-// - Configurable sampling rate
-// ══════════════════════════════════════════════════════════════════════════════
+/* ── sensor types ─────────────────────────────────────────────────────── */
 
-// Sensor types
+/**
+ * @brief Classification of the physical quantity being measured.
+ */
 typedef enum {
-    SENSOR_TYPE_ACCEL       = 0x01,  // Accelerometer
-    SENSOR_TYPE_GYRO        = 0x02,  // Gyroscope
-    SENSOR_TYPE_MAGNET      = 0x03,  // Magnetometer
-    SENSOR_TYPE_LIGHT       = 0x04,  // Light sensor
-    SENSOR_TYPE_PROXIMITY   = 0x05,  // Proximity sensor
-    SENSOR_TYPE_PRESSURE    = 0x06,  // Pressure sensor
-    SENSOR_TYPE_TEMPERATURE = 0x07,  // Temperature sensor
-    SENSOR_TYPE_HUMIDITY    = 0x08,  // Humidity sensor
+  SENSOR_TYPE_ACCEL = 0x01,
+  SENSOR_TYPE_GYRO = 0x02,
+  SENSOR_TYPE_MAGNET = 0x03,
+  SENSOR_TYPE_LIGHT = 0x04,
+  SENSOR_TYPE_PROXIMITY = 0x05,
+  SENSOR_TYPE_PRESSURE = 0x06,
+  SENSOR_TYPE_TEMPERATURE = 0x07,
+  SENSOR_TYPE_HUMIDITY = 0x08,
 } sensor_type_t;
 
-// Sensor data for 3-axis sensors (accel, gyro, magnet)
+/* ── data structures ──────────────────────────────────────────────────── */
+
+/**
+ * @brief One sample from a 3-axis sensor.
+ *
+ * Values are in SI units after the device scale factor is applied:
+ * m/s² for accelerometers, rad/s for gyroscopes, µT for magnetometers.
+ *
+ * @p timestamp is nanoseconds on CLOCK_MONOTONIC.  In buffer mode the
+ * timestamp is supplied by the IIO hardware trigger and reflects actual
+ * DMA-completion time rather than the time the application dequeued it.
+ */
 typedef struct {
-    float x;  // X-axis value
-    float y;  // Y-axis value
-    float z;  // Z-axis value
-    uint64_t timestamp;  // Timestamp in nanoseconds
+  float x;
+  float y;
+  float z;
+  uint64_t timestamp;
 } sensor_data_3axis_t;
 
-// Sensor data for single-value sensors
+/**
+ * @brief One sample from a single-value sensor.
+ */
 typedef struct {
-    float value;         // Sensor value
-    uint64_t timestamp;  // Timestamp in nanoseconds
+  float value;
+  uint64_t timestamp;
 } sensor_data_1axis_t;
 
-// Sensor configuration
+/* ── configuration ────────────────────────────────────────────────────── */
+
+/**
+ * @brief Configuration for a sensor HAL device.
+ *
+ * Set @p enable_buffer to 1 to request IIO hardware buffer mode.  If the
+ * kernel driver does not expose /dev/iio:deviceN the implementation
+ * silently falls back to per-axis sysfs reads.
+ */
 typedef struct {
-    sensor_type_t type;         // Sensor type
-    uint32_t sampling_rate_hz;  // Sampling rate (Hz)
-    uint32_t scale;             // Scale factor (device-specific)
-    int enable_buffer;          // Enable buffered reading
+  sensor_type_t type;
+  uint32_t sampling_rate_hz;
+  uint32_t scale;
+  int enable_buffer;
 } sensor_config_t;
 
-// Sensor info
+/* ── device info ──────────────────────────────────────────────────────── */
+
+/**
+ * @brief Runtime snapshot of sensor device state.
+ */
 typedef struct {
-    char iio_device[64];        // IIO device path
-    sensor_type_t type;         // Sensor type
-    uint32_t sampling_rate_hz;  // Current sampling rate
-    float resolution;           // Resolution (smallest measurable value)
-    float max_range;            // Maximum value
-    uint32_t fifo_size;         // Hardware FIFO size
+  char iio_device_path[64];
+  sensor_type_t type;
+  uint32_t sampling_rate_hz;
+  float resolution;
+  float max_range;
+  uint32_t fifo_size;
+  int buffer_mode_active;
 } sensor_info_t;
 
-// Sensor control commands
+/* ── control commands ─────────────────────────────────────────────────── */
+
+/**
+ * @brief Commands accepted by the sensor device control() operation.
+ *
+ *   SENSOR_CMD_SET_RATE      — arg: const uint32_t *  (Hz)
+ *   SENSOR_CMD_GET_RATE      — arg: uint32_t *
+ *   SENSOR_CMD_ENABLE_BUFFER — arg: const int *        (0=disable, 1=enable)
+ *   SENSOR_CMD_CALIBRATE     — arg: NULL   (zeroes current reading as offset)
+ *   SENSOR_CMD_GET_CONFIG    — arg: sensor_config_t *
+ */
 typedef enum {
-    SENSOR_CMD_SET_RATE      = 0x2000,  // arg: uint32_t* (Hz)
-    SENSOR_CMD_GET_RATE      = 0x2001,  // arg: uint32_t*
-    SENSOR_CMD_ENABLE_BUFFER = 0x2002,  // arg: int* (0=disable, 1=enable)
-    SENSOR_CMD_CALIBRATE     = 0x2003,  // arg: NULL
-    SENSOR_CMD_GET_CONFIG    = 0x2004,  // arg: sensor_config_t*
+  SENSOR_CMD_SET_RATE = 0x2000,
+  SENSOR_CMD_GET_RATE = 0x2001,
+  SENSOR_CMD_ENABLE_BUFFER = 0x2002,
+  SENSOR_CMD_CALIBRATE = 0x2003,
+  SENSOR_CMD_GET_CONFIG = 0x2004,
 } sensor_cmd_t;
 
-// ══════════════════════════════════════════════════════════════════════════════
-// SENSOR HAL FUNCTIONS
-// ══════════════════════════════════════════════════════════════════════════════
+/* ── public API ───────────────────────────────────────────────────────── */
 
-// Create sensor device
-// name: device name (user-friendly, like "accel0")
-// iio_device: IIO device identifier (like "iio:device0")
-// config: sensor configuration
-// Returns: device pointer on success, NULL on failure
-hw_device_t* sensor_hal_create(const char* name,
-                               const char* iio_device,
-                               const sensor_config_t* config);
+/**
+ * @brief Allocate and initialise a sensor HAL device.
+ *
+ * Validates @p iio_device_id against the expected IIO naming pattern
+ * and confirms the resolved path is anchored under the IIO sysfs base
+ * directory before storing it.
+ *
+ * @param device_name    Human-readable name for registry lookup.
+ * @param iio_device_id  IIO device identifier, e.g. "iio:device0".
+ * @param sensor_config  Sensor parameters; a copy is stored internally.
+ * @return Initialised hw_device_t with ref_count=1, or NULL on error.
+ */
+hw_device_t *sensor_hal_create(const char *device_name,
+                               const char *iio_device_id,
+                               const sensor_config_t *sensor_config);
 
-// Destroy sensor device
-void sensor_hal_destroy(hw_device_t* dev);
+/**
+ * @brief Release all resources held by a sensor device.
+ * @param device_ptr  Device returned by @ref sensor_hal_create.
+ */
+void sensor_hal_destroy(hw_device_t *device_ptr);
 
-// Helper: Get default sensor configuration
-sensor_config_t sensor_hal_default_config(sensor_type_t type);
+/**
+ * @brief Return the default configuration for a given sensor type.
+ *
+ * 100 Hz, no buffer, scale = 1.
+ *
+ * @param sensor_type  Physical quantity to measure.
+ * @return Populated sensor_config_t; no heap allocation.
+ */
+sensor_config_t sensor_hal_default_config(sensor_type_t sensor_type);
 
-// Helper: Get sensor type name as string
-const char* sensor_hal_type_string(sensor_type_t type);
+/**
+ * @brief Return a human-readable string for a sensor type.
+ * @param sensor_type  Classification code.
+ * @return Static string; never NULL.
+ */
+const char *sensor_hal_type_string(sensor_type_t sensor_type);
 
-// Helper: Read 3-axis sensor data
-// dev: sensor device
-// data: output data structure
-// Returns: 0 on success, negative error code on failure
-int sensor_hal_read_3axis(hw_device_t* dev, sensor_data_3axis_t* data);
+/**
+ * @brief Read one sample from a 3-axis sensor (accel, gyro, magnet).
+ *
+ * @param device_ptr  Active sensor device.
+ * @param data_out    Caller-allocated struct to fill.
+ * @return HAL_SUCCESS or HAL_ERROR_*.
+ */
+int sensor_hal_read_3axis(hw_device_t *device_ptr,
+                          sensor_data_3axis_t *data_out);
 
-// Helper: Read single-value sensor data
-// dev: sensor device
-// data: output data structure
-// Returns: 0 on success, negative error code on failure
-int sensor_hal_read_1axis(hw_device_t* dev, sensor_data_1axis_t* data);
+/**
+ * @brief Read one sample from a single-value sensor.
+ *
+ * @param device_ptr  Active sensor device.
+ * @param data_out    Caller-allocated struct to fill.
+ * @return HAL_SUCCESS or HAL_ERROR_*.
+ */
+int sensor_hal_read_1axis(hw_device_t *device_ptr,
+                          sensor_data_1axis_t *data_out);
 
-#endif // SENSOR_HAL_H
+#endif /* SENSOR_HAL_H */
