@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 
 /*
  * sm_security.c - Privilege drop, resource limits, seccomp filter, peer credentials.
