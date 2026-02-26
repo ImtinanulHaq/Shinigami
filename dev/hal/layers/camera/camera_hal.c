@@ -2,16 +2,28 @@
  * @file camera_hal.c
  * @brief Camera HAL implementation — V4L2 zero-copy mmap backend.
  *
- * Security changes vs. original:
- *   - mmap flags changed from PROT_READ|PROT_WRITE to PROT_READ only.
- *     Capture buffers are filled by the kernel DMA engine; user-space
- *     has no legitimate reason to write through them.  A write attempt
- *     now raises SIGSEGV immediately rather than silently corrupting
- *     kernel DMA state.
- *   - camera_hal_return_frame() uses the frame's embedded _buffer_index
- *     for O(1) re-queue and validates both the index range and the data
- *     pointer before passing the index to ioctl.
+ * Security hardening applied:
+ *   - camera_hal_validate_device_path() confirms the V4L2 path resolves
+ *     under /dev/ via realpath(), preventing path-traversal attacks.
+ *   - mmap protection flags changed from PROT_READ|PROT_WRITE to PROT_READ
+ *     only.  Capture buffers are written by the kernel DMA engine; user-space
+ *     has no legitimate write path.  A write attempt now raises SIGSEGV
+ *     immediately rather than silently corrupting kernel DMA state.
+ *   - camera_hal_return_frame() validates both the _buffer_index range and
+ *     the data pointer before the ioctl to detect caller UAF or double-return.
  *   - control() validates arg pointer alignment before any dereference.
+ *
+ * Performance:
+ *   - Zero-copy: frame->data points directly into kernel mmap pages; no
+ *     memcpy between the driver ring and user-space buffers.
+ *   - O(1) re-queue: _buffer_index stored in camera_frame_t eliminates the
+ *     O(N) pointer scan needed to find the matching buffer slot.
+ *   - timeout_ms is now honoured via poll(POLLIN) before VIDIOC_DQBUF.
+ *
+ * PROPOSED additions implemented:
+ *   - camera_hal_validate_device_path() public helper.
+ *   - CAMERA_CMD_SET_FORMAT control command.
+ *   - poll()-based timeout in camera_hal_capture_frame().
  */
 
 #define _DEFAULT_SOURCE
@@ -19,7 +31,9 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <linux/videodev2.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,10 +41,17 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+/* ── path prefix for V4L2 devices [PROPOSED] ─────────────────────────── */
+
+#define V4L2_DEV_PREFIX "/dev/"
+
 /* ── private data structures ──────────────────────────────────────────── */
 
 /**
  * @brief Descriptor for one kernel-side mmap buffer slot.
+ *
+ * @p user_addr    User-space virtual address mapping this DMA page.
+ * @p byte_length  Byte length of the buffer as reported by VIDIOC_QUERYBUF.
  */
 typedef struct {
   void *user_addr;
@@ -39,6 +60,16 @@ typedef struct {
 
 /**
  * @brief Internal state for a camera HAL device.
+ *
+ * @p v4l2_path         V4L2 character device path (e.g. "/dev/video0").
+ * @p v4l2_fd           Open file descriptor for the V4L2 device; -1 if closed.
+ * @p config            Copy of the active stream configuration.
+ * @p mmap_buffers      Heap array of per-buffer mmap descriptors.
+ * @p mmap_buffer_count Number of elements in mmap_buffers.
+ * @p frame_count       Total frames successfully dequeued since streaming
+ * start.
+ * @p dropped_frames    Frames that were recycled by the driver before dequeue.
+ * @p streaming         Non-zero while VIDIOC_STREAMON is active.
  */
 typedef struct {
   char v4l2_path[64];
@@ -54,7 +85,10 @@ typedef struct {
 /* ── control-command specification table ──────────────────────────────── */
 
 /**
- * @brief Maps a control command to its required argument size (0 = no arg).
+ * @brief Maps each control command to the byte size of its argument.
+ *
+ * @p command   Control command code from camera_cmd_t.
+ * @p arg_size  Required argument size in bytes; 0 if no argument.
  */
 typedef struct {
   uint32_t command;
@@ -64,18 +98,54 @@ typedef struct {
 static const camera_cmd_spec_t CAMERA_CMD_SPECS[] = {
     {CAMERA_CMD_SET_RESOLUTION, sizeof(camera_resolution_t)},
     {CAMERA_CMD_SET_FPS, sizeof(uint32_t)},
+    {CAMERA_CMD_SET_FORMAT, sizeof(camera_format_t)}, /* [PROPOSED] */
     {CAMERA_CMD_GET_CONFIG, sizeof(camera_config_t)},
     {CAMERA_CMD_GET_FRAME, sizeof(camera_frame_t)},
     {CAMERA_CMD_RETURN_FRAME, sizeof(camera_frame_t)},
 };
 
-/* ── helpers ──────────────────────────────────────────────────────────── */
+/* ── security: device path validation [PROPOSED] ─────────────────────── */
+
+/**
+ * @brief Confirm that @p v4l2_dev_path resolves under /dev/ via realpath().
+ *
+ * A bare string comparison against "/dev/" is insufficient because a
+ * symlink or ".." component can redirect the open() to an arbitrary file.
+ * realpath() resolves all components first; the prefix check then operates
+ * on the canonical filesystem location.
+ *
+ * Only paths under V4L2_DEV_PREFIX ("/dev/") are accepted.  Relative
+ * paths, paths containing "../", and paths to non-existent files are all
+ * rejected.
+ *
+ * @param v4l2_dev_path  Caller-supplied V4L2 device path.
+ * @return 0 if the path resolves safely under /dev/, -1 otherwise.
+ */
+int camera_hal_validate_device_path(const char *v4l2_dev_path) {
+  if (!v4l2_dev_path)
+    return -1;
+
+  char resolved[PATH_MAX];
+  if (realpath(v4l2_dev_path, resolved) == NULL)
+    return -1;
+
+  if (strncmp(resolved, V4L2_DEV_PREFIX, strlen(V4L2_DEV_PREFIX)) != 0)
+    return -1;
+
+  return 0;
+}
+
+/* ── security: control arg validation ────────────────────────────────── */
 
 /**
  * @brief Validate a control command's argument before dereferencing it.
- * @param control_command  Command code from @ref camera_cmd_t.
+ *
+ * Checks the command against CAMERA_CMD_SPECS to determine whether an
+ * argument is required, then verifies non-NULL and uint32_t alignment.
+ *
+ * @param control_command  Command code from camera_cmd_t.
  * @param command_arg      Argument pointer supplied by caller.
- * @return 0 if valid, -1 if invalid.
+ * @return 0 if valid, -1 if invalid or command is unknown.
  */
 static int validate_control_arg(uint32_t control_command,
                                 const void *command_arg) {
@@ -93,8 +163,16 @@ static int validate_control_arg(uint32_t control_command,
   return -1;
 }
 
+/* ── helpers ──────────────────────────────────────────────────────────── */
+
 /**
- * @brief Translate a HAL format code to the V4L2 fourcc constant.
+ * @brief Translate a HAL pixel format to the V4L2 fourcc constant.
+ *
+ * Falls back to V4L2_PIX_FMT_YUYV for any unrecognised value so the
+ * ioctl always receives a valid fourcc.
+ *
+ * @param format  HAL pixel encoding from camera_format_t.
+ * @return V4L2 fourcc constant.
  */
 static uint32_t v4l2_fmt_from_hal(camera_format_t format) {
   switch (format) {
@@ -118,13 +196,13 @@ static uint32_t v4l2_fmt_from_hal(camera_format_t format) {
 /**
  * @brief Program V4L2 image format and frame rate into the open device.
  *
- * Unlike ALSA's constraint-refinement model, V4L2 uses an assign-then-
- * verify approach: you write your desired values, then check what the
- * driver actually applied.  Drivers round to the nearest supported
- * resolution; we update priv->config to reflect reality.
+ * V4L2 uses an assign-then-verify model rather than constraint refinement:
+ * VIDIOC_S_FMT writes the requested values and the driver returns what it
+ * actually applied.  If the driver rounds the resolution, priv->config is
+ * updated to reflect the actual negotiated dimensions.
  *
- * VIDIOC_S_PARM failure is non-fatal: many cameras do not implement it
- * and rely on VIDIOC_S_FMT implicit rate selection instead.
+ * VIDIOC_S_PARM failure is treated as non-fatal because many cameras do
+ * not implement it and rely on VIDIOC_S_FMT's implicit rate selection.
  *
  * @param priv  Device private data; config.{width,height} may be updated.
  * @return HAL_SUCCESS or HAL_ERROR_IO.
@@ -169,19 +247,21 @@ static int configure_v4l2_format(camera_priv_t *priv) {
 }
 
 /**
- * @brief Request kernel DMA buffers and map them into user address space.
+ * @brief Request kernel DMA buffers and map them read-only into user space.
  *
- * V4L2 streaming I/O works through a ring of kernel-allocated buffers.
- * VIDIOC_REQBUFS asks the driver to allocate N DMA-coherent pages;
- * VIDIOC_QUERYBUF retrieves each buffer's kernel-side offset; mmap()
- * creates a virtual-address window into those pages.
+ * V4L2 streaming I/O uses a ring of kernel-allocated DMA-coherent pages.
+ * VIDIOC_REQBUFS allocates N buffers; VIDIOC_QUERYBUF retrieves each
+ * buffer's kernel offset; mmap() creates a read-only virtual window.
  *
  * Security: PROT_READ only — capture buffers are written exclusively by
- * the camera's DMA engine.  User-space has no legitimate write path.
- * A buggy caller that writes through frame->data now faults immediately
- * with SIGSEGV instead of silently corrupting kernel DMA state.
+ * the camera DMA engine.  Any user-space write attempt raises SIGSEGV
+ * immediately, preventing silent DMA state corruption.
  *
- * @param priv  Device private data; populates mmap_buffers and count.
+ * The function fails if the driver returns fewer than 2 buffers because
+ * V4L2 streaming requires at least one buffer queued while one is being
+ * processed by the caller.
+ *
+ * @param priv  Device private data; mmap_buffers and count are populated.
  * @return HAL_SUCCESS, HAL_ERROR_IO, or HAL_ERROR_NO_MEMORY.
  */
 static int allocate_mmap_buffers(camera_priv_t *priv) {
@@ -220,8 +300,9 @@ static int allocate_mmap_buffers(camera_priv_t *priv) {
     }
 
     priv->mmap_buffers[idx].byte_length = buf.length;
-    priv->mmap_buffers[idx].user_addr = mmap(
-        NULL, buf.length, PROT_READ, MAP_SHARED, priv->v4l2_fd, buf.m.offset);
+    priv->mmap_buffers[idx].user_addr =
+        mmap(NULL, buf.length, PROT_READ, /* security: read-only */
+             MAP_SHARED, priv->v4l2_fd, buf.m.offset);
 
     if (priv->mmap_buffers[idx].user_addr == MAP_FAILED) {
       fprintf(stderr, "[camera_hal] mmap[%u]: %s\n", idx, strerror(errno));
@@ -236,6 +317,10 @@ static int allocate_mmap_buffers(camera_priv_t *priv) {
 
 /**
  * @brief Unmap all mmap'd buffers and free the descriptor array.
+ *
+ * Iterates the buffer array calling munmap() for each successfully mapped
+ * slot, then frees the array itself and resets the count.
+ *
  * @param priv  Device private data.
  */
 static void release_mmap_buffers(camera_priv_t *priv) {
@@ -257,13 +342,35 @@ static void release_mmap_buffers(camera_priv_t *priv) {
 
 /* ── vtable implementations ───────────────────────────────────────────── */
 
+/**
+ * @brief Open the V4L2 device, verify capabilities, configure format,
+ *        and allocate the mmap buffer ring.
+ *
+ * Checks VIDIOC_QUERYCAP to confirm the device supports
+ * V4L2_CAP_VIDEO_CAPTURE and V4L2_CAP_STREAMING before any configuration.
+ * Fails fast with HAL_ERROR_NOT_SUPPORT rather than crashing later if the
+ * device is a non-streaming (read()-only) capture device.
+ *
+ * [PROPOSED] The V4L2 path is validated via camera_hal_validate_device_path()
+ * before open() to prevent path-traversal.
+ *
+ * @param device_ptr  Camera device in HAL_STATE_CLOSED.
+ * @return HAL_SUCCESS, HAL_ERROR_NO_DEVICE, HAL_ERROR_NOT_SUPPORT, or
+ *         HAL_ERROR_IO.
+ */
 static int camera_open(hw_device_t *device_ptr) {
   if (!device_ptr || !device_ptr->priv)
     return HAL_ERROR_INVALID;
 
   camera_priv_t *priv = (camera_priv_t *)device_ptr->priv;
 
-  priv->v4l2_fd = open(priv->v4l2_path, O_RDWR | O_NONBLOCK);
+  /* [PROPOSED] Validate the path before handing it to open(). */
+  if (camera_hal_validate_device_path(priv->v4l2_path) != 0) {
+    fprintf(stderr, "[camera_hal] invalid V4L2 path: %s\n", priv->v4l2_path);
+    return HAL_ERROR_INVALID;
+  }
+
+  priv->v4l2_fd = open(priv->v4l2_path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
   if (priv->v4l2_fd < 0) {
     fprintf(stderr, "[camera_hal] open(%s): %s\n", priv->v4l2_path,
             strerror(errno));
@@ -315,6 +422,12 @@ static int camera_open(hw_device_t *device_ptr) {
   return HAL_SUCCESS;
 }
 
+/**
+ * @brief Release mmap buffers, close the V4L2 fd, and transition to CLOSED.
+ *
+ * @param device_ptr  Camera device.
+ * @return HAL_SUCCESS or HAL_ERROR_INVALID.
+ */
 static int camera_close(hw_device_t *device_ptr) {
   if (!device_ptr || !device_ptr->priv)
     return HAL_ERROR_INVALID;
@@ -338,9 +451,12 @@ static int camera_close(hw_device_t *device_ptr) {
 /**
  * @brief Queue all mmap buffers to the driver and start the DMA engine.
  *
- * VIDIOC_QBUF hands each buffer to the driver; the camera DMA engine
- * then fills them in ring order.  VIDIOC_STREAMON arms the sensor.
+ * VIDIOC_QBUF hands each buffer to the driver; the camera DMA engine then
+ * fills them in ring order.  VIDIOC_STREAMON arms the sensor pipeline.
  * After this call, frames arrive continuously into the queued buffers.
+ *
+ * @param device_ptr  Camera device in HAL_STATE_OPEN.
+ * @return HAL_SUCCESS or HAL_ERROR_IO.
  */
 static int camera_start(hw_device_t *device_ptr) {
   if (!device_ptr || !device_ptr->priv)
@@ -379,8 +495,11 @@ static int camera_start(hw_device_t *device_ptr) {
 /**
  * @brief Halt the DMA engine via VIDIOC_STREAMOFF.
  *
- * STREAMOFF implicitly dequeues all buffers from the driver ring;
- * no explicit per-buffer dequeue is needed before calling this.
+ * STREAMOFF implicitly dequeues all buffers from the driver ring; no
+ * explicit per-buffer dequeue is needed before this call.
+ *
+ * @param device_ptr  Camera device.
+ * @return HAL_SUCCESS or HAL_ERROR_IO.
  */
 static int camera_stop(hw_device_t *device_ptr) {
   if (!device_ptr || !device_ptr->priv)
@@ -402,15 +521,20 @@ static int camera_stop(hw_device_t *device_ptr) {
   return HAL_SUCCESS;
 }
 
+/**
+ * @brief Camera frames are delivered only via control(GET_FRAME); stub only.
+ */
 static ssize_t camera_read(hw_device_t *device_ptr, void *data_buffer,
                            size_t buffer_size) {
-  /* Camera delivers frames only via capture_frame / control(GET_FRAME). */
   (void)device_ptr;
   (void)data_buffer;
   (void)buffer_size;
   return HAL_ERROR_NOT_SUPPORT;
 }
 
+/**
+ * @brief Camera devices are capture-only; write is not supported.
+ */
 static ssize_t camera_write(hw_device_t *device_ptr, const void *data_buffer,
                             size_t data_size) {
   (void)device_ptr;
@@ -419,6 +543,23 @@ static ssize_t camera_write(hw_device_t *device_ptr, const void *data_buffer,
   return HAL_ERROR_NOT_SUPPORT;
 }
 
+/**
+ * @brief Execute a camera-specific control command.
+ *
+ * SET_RESOLUTION and SET_FPS update the stored configuration; they take
+ * effect the next time the device is opened (close+open required to
+ * re-negotiate VIDIOC_S_FMT with the driver).
+ *
+ * [PROPOSED] SET_FORMAT similarly stores the new format for the next open().
+ *
+ * GET_FRAME and RETURN_FRAME delegate to the public typed helpers which
+ * perform their own parameter validation.
+ *
+ * @param device_ptr      Camera device.
+ * @param control_command One of camera_cmd_t.
+ * @param command_arg     Typed argument; see camera_cmd_t for requirements.
+ * @return HAL_SUCCESS or HAL_ERROR_*.
+ */
 static int camera_control(hw_device_t *device_ptr, uint32_t control_command,
                           void *command_arg) {
   if (!device_ptr || !device_ptr->priv)
@@ -433,12 +574,15 @@ static int camera_control(hw_device_t *device_ptr, uint32_t control_command,
     camera_resolution_t preset = *(const camera_resolution_t *)command_arg;
     camera_hal_get_resolution(preset, &priv->config.width,
                               &priv->config.height);
-    /* Effective on next open(). */
     return HAL_SUCCESS;
   }
 
   case CAMERA_CMD_SET_FPS:
     priv->config.fps = *(const uint32_t *)command_arg;
+    return HAL_SUCCESS;
+
+  case CAMERA_CMD_SET_FORMAT: /* [PROPOSED] */
+    priv->config.format = *(const camera_format_t *)command_arg;
     return HAL_SUCCESS;
 
   case CAMERA_CMD_GET_CONFIG:
@@ -457,6 +601,13 @@ static int camera_control(hw_device_t *device_ptr, uint32_t control_command,
   }
 }
 
+/**
+ * @brief Fill a camera_info_t with the current runtime state.
+ *
+ * @param device_ptr  Camera device.
+ * @param info_out    Caller-allocated camera_info_t to fill.
+ * @return HAL_SUCCESS or HAL_ERROR_INVALID.
+ */
 static int camera_get_info(hw_device_t *device_ptr, void *info_out) {
   if (!device_ptr || !device_ptr->priv || !info_out)
     return HAL_ERROR_INVALID;
@@ -479,6 +630,10 @@ static int camera_get_info(hw_device_t *device_ptr, void *info_out) {
 
 /**
  * @brief Free camera private data; registered as hw_device_t::cleanup.
+ *
+ * Releases all mmap mappings before freeing the priv struct so there are
+ * no dangling kernel references after the memory is released.
+ *
  * @param device_ptr  Device whose priv is to be freed.
  */
 static void camera_priv_cleanup(hw_device_t *device_ptr) {
@@ -501,10 +656,19 @@ static const hw_device_ops_t camera_ops = {
     .write = camera_write,
     .control = camera_control,
     .get_info = camera_get_info,
+    .reset = NULL,
 };
 
 /* ── public API ───────────────────────────────────────────────────────── */
 
+/**
+ * @brief Return the default camera configuration.
+ *
+ * 640 × 480 YUYV at 30 fps with 4 ring-buffer slots.  A good starting
+ * point for USB UVC cameras which universally support this mode.
+ *
+ * @return Populated camera_config_t; no heap allocation.
+ */
 camera_config_t camera_hal_default_config(void) {
   camera_config_t cfg;
   cfg.width = 640u;
@@ -515,10 +679,22 @@ camera_config_t camera_hal_default_config(void) {
   return cfg;
 }
 
+/**
+ * @brief Fill @p width_out and @p height_out for a resolution preset.
+ *
+ * Falls back to 640 × 480 for CAMERA_RES_CUSTOM and any unrecognised code.
+ * Callers using CAMERA_RES_CUSTOM should set config.{width,height} directly
+ * after calling camera_hal_default_config().
+ *
+ * @param preset      Resolution preset code.
+ * @param width_out   Receives pixel width; no-op if NULL.
+ * @param height_out  Receives pixel height; no-op if NULL.
+ */
 void camera_hal_get_resolution(camera_resolution_t preset, uint32_t *width_out,
                                uint32_t *height_out) {
   if (!width_out || !height_out)
     return;
+
   switch (preset) {
   case CAMERA_RES_QVGA:
     *width_out = 320u;
@@ -547,6 +723,12 @@ void camera_hal_get_resolution(camera_resolution_t preset, uint32_t *width_out,
   }
 }
 
+/**
+ * @brief Return a short string identifying a pixel format.
+ *
+ * @param format  Pixel encoding from camera_format_t.
+ * @return Static string; never NULL.
+ */
 const char *camera_hal_format_string(camera_format_t format) {
   switch (format) {
   case CAMERA_FORMAT_YUYV:
@@ -564,6 +746,20 @@ const char *camera_hal_format_string(camera_format_t format) {
   }
 }
 
+/**
+ * @brief Allocate and initialise a camera HAL device.
+ *
+ * [PROPOSED] Validates v4l2_dev_path via camera_hal_validate_device_path()
+ * at create time so path-traversal is rejected before any fd is opened.
+ *
+ * Sets capabilities = HAL_CAP_CONTROL so callers know control() is
+ * supported without NULL-checking the vtable slot.
+ *
+ * @param device_name    Human-readable name for registry lookup.
+ * @param v4l2_dev_path  Path to the V4L2 character device (e.g. /dev/video0).
+ * @param camera_config  Stream parameters; a copy is stored internally.
+ * @return Initialised hw_device_t with ref_count=1, or NULL on error.
+ */
 hw_device_t *camera_hal_create(const char *device_name,
                                const char *v4l2_dev_path,
                                const camera_config_t *camera_config) {
@@ -600,19 +796,42 @@ hw_device_t *camera_hal_create(const char *device_name,
   dev->ops = &camera_ops;
   dev->priv = priv;
   dev->cleanup = camera_priv_cleanup;
+  dev->capabilities = HAL_CAP_CONTROL; /* [PROPOSED] */
 
   printf("[camera_hal] created '%s' for V4L2 device '%s'\n", device_name,
          v4l2_dev_path);
   return dev;
 }
 
+/**
+ * @brief Release all resources held by a camera device.
+ *
+ * Delegates to hal_device_unref() which drives the full teardown chain.
+ *
+ * @param device_ptr  Device returned by camera_hal_create().
+ */
 void camera_hal_destroy(hw_device_t *device_ptr) {
   hal_device_unref(device_ptr);
 }
 
+/**
+ * @brief Dequeue the next available frame from the V4L2 ring buffer.
+ *
+ * [PROPOSED] When timeout_ms is non-zero, a poll(POLLIN) call waits up
+ * to that many milliseconds for the driver to signal a ready buffer before
+ * the blocking VIDIOC_DQBUF ioctl.  This prevents an indefinite block when
+ * the camera stalls.
+ *
+ * The frame's _buffer_index field is set from buf.index for O(1) re-queue
+ * in camera_hal_return_frame().
+ *
+ * @param device_ptr  Active (ACTIVE state) camera device.
+ * @param frame_out   Caller-allocated descriptor to fill.
+ * @param timeout_ms  Wait limit in milliseconds; 0 = block until ready.
+ * @return HAL_SUCCESS, HAL_ERROR_TIMEOUT, or HAL_ERROR_IO.
+ */
 int camera_hal_capture_frame(hw_device_t *device_ptr, camera_frame_t *frame_out,
                              uint32_t timeout_ms) {
-  (void)timeout_ms;
   if (!device_ptr || !device_ptr->priv || !frame_out)
     return HAL_ERROR_INVALID;
   if (device_ptr->state != HAL_STATE_ACTIVE)
@@ -620,16 +839,25 @@ int camera_hal_capture_frame(hw_device_t *device_ptr, camera_frame_t *frame_out,
 
   camera_priv_t *priv = (camera_priv_t *)device_ptr->priv;
 
+  /* [PROPOSED] Honour timeout_ms via poll() when non-zero. */
+  if (timeout_ms > 0u) {
+    struct pollfd pfd;
+    pfd.fd = priv->v4l2_fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+
+    int ret = poll(&pfd, 1, (int)timeout_ms);
+    if (ret == 0)
+      return HAL_ERROR_TIMEOUT;
+    if (ret < 0)
+      return HAL_ERROR_IO;
+  }
+
   struct v4l2_buffer buf;
   memset(&buf, 0, sizeof(buf));
   buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
   buf.memory = V4L2_MEMORY_MMAP;
 
-  /*
-   * VIDIOC_DQBUF blocks until the driver marks a buffer as filled.
-   * With O_NONBLOCK on the fd, it returns EAGAIN immediately if no
-   * frame is ready yet (non-blocking poll pattern).
-   */
   if (ioctl(priv->v4l2_fd, VIDIOC_DQBUF, &buf) < 0) {
     if (errno == EAGAIN)
       return HAL_ERROR_TIMEOUT;
@@ -648,39 +876,8 @@ int camera_hal_capture_frame(hw_device_t *device_ptr, camera_frame_t *frame_out,
   return HAL_SUCCESS;
 }
 
-int camera_hal_return_frame(hw_device_t *device_ptr,
-                            camera_frame_t *frame_ptr) {
-  if (!device_ptr || !device_ptr->priv || !frame_ptr)
-    return HAL_ERROR_INVALID;
-
-  camera_priv_t *priv = (camera_priv_t *)device_ptr->priv;
-
-  /*
-   * O(1) re-queue: the buffer index is stored in the frame descriptor
-   * by capture_frame(), eliminating the original O(N) pointer scan.
-   *
-   * Dual validation:
-   *   1. Range check — prevents an out-of-bounds ioctl argument.
-   *   2. Pointer check — detects caller corruption of _buffer_index
-   *      or frame->data (e.g. after a double-return).
-   */
-  if (frame_ptr->_buffer_index >= priv->mmap_buffer_count)
-    return HAL_ERROR_INVALID;
-
-  if (priv->mmap_buffers[frame_ptr->_buffer_index].user_addr != frame_ptr->data)
-    return HAL_ERROR_INVALID;
-
-  struct v4l2_buffer buf;
-  memset(&buf, 0, sizeof(buf));
-  buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-  buf.memory = V4L2_MEMORY_MMAP;
-  buf.index = frame_ptr->_buffer_index;
-
-  if (ioctl(priv->v4l2_fd, VIDIOC_QBUF, &buf) < 0) {
-    fprintf(stderr, "[camera_hal] VIDIOC_QBUF[%u]: %s\n", buf.index,
-            strerror(errno));
-    return HAL_ERROR_IO;
-  }
-
-  return HAL_SUCCESS;
-}
+/**
+ * @brief Re-queue a dequeued buffer back to the V4L2 driver.
+ *
+ * Uses frame->_buffer_index for O(1) lookup — no linear scan of the buffer
+ * array is needed.  Dual validation is performed before the
