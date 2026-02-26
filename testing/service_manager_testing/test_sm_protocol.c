@@ -1,6 +1,6 @@
 /* Unit tests for sm_protocol - Message format validation */
 #include "unity.h"
-#include "../../core/service_manager/infrastructure/sm_protocol.h"
+#include "../../dev/core/service_manager/infrastructure/sm_protocol.h"
 #include <time.h>
 #include <string.h>
 
