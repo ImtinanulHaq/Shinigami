@@ -14,6 +14,7 @@
  *     and control commands; data-path read/write hold the read-side lock.
  */
 
+#define _DEFAULT_SOURCE
 #include "audio_hal.h"
 
 #include <errno.h>

@@ -16,7 +16,7 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <sys/types.h> /* ssize_t */
+#include <sys/types.h>
 
 /* ── version ──────────────────────────────────────────────────────────── */
 

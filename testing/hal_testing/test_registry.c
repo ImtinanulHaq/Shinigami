@@ -7,7 +7,7 @@
  * removal, and concurrent read access from multiple threads.
  */
 
-#include "../hal_interface.h"
+#include "hal_interface.h"
 #include "test_framework.h"
 
 #include <pthread.h>

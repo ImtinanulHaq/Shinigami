@@ -18,6 +18,8 @@
  *     /dev/iio:deviceN.
  */
 
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
 #include "sensor_hal.h"
 
 #include <errno.h>

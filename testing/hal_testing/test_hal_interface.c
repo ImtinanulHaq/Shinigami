@@ -6,7 +6,7 @@
  * Registry ops are tested separately in test_registry.c.
  */
 
-#include "../hal_interface.h"
+#include "hal_interface.h"
 #include "test_framework.h"
 
 #include <stdint.h>
