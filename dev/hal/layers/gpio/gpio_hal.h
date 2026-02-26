@@ -10,6 +10,11 @@
  *       A future revision of this HAL should target libgpiod
  *       (/dev/gpiochipN + ioctl) which supports atomic multi-pin
  *       operations and per-consumer ownership semantics.
+ *
+ * PROPOSED CHANGES:
+ *   - Added gpio_hal_get_info() public helper to fill gpio_info_t without
+ *     going through the generic control() dispatch.
+ *   - Added GPIO_CMD_TOGGLE convenience command for output pins.
  */
 
 #ifndef GPIO_HAL_H
@@ -23,14 +28,19 @@
  * @brief Maximum allowed GPIO pin number.
  *
  * Platform-specific.  Raspberry Pi 4 exposes pins 0–57.  Adjust for
- * your target SoC.
+ * your target SoC via -DGPIO_PIN_NUMBER_MAX=N at build time.
  */
+#ifndef GPIO_PIN_NUMBER_MAX
 #define GPIO_PIN_NUMBER_MAX 1023U
+#endif
 
 /* ── enumerations ─────────────────────────────────────────────────────── */
 
 /**
- * @brief Whether the pin is configured as input or output.
+ * @brief Whether the pin is configured as an input or output.
+ *
+ * @p GPIO_DIR_INPUT   Pin is high-impedance; reads hardware state.
+ * @p GPIO_DIR_OUTPUT  Pin drives the bus low (0) or high (VCC).
  */
 typedef enum {
   GPIO_DIR_INPUT = 0,
@@ -39,6 +49,9 @@ typedef enum {
 
 /**
  * @brief Logic level on the pin.
+ *
+ * @p GPIO_VALUE_LOW   Logic 0 / GND level.
+ * @p GPIO_VALUE_HIGH  Logic 1 / VCC level.
  */
 typedef enum {
   GPIO_VALUE_LOW = 0,
@@ -47,6 +60,11 @@ typedef enum {
 
 /**
  * @brief Edge-detection mode for interrupt-capable input pins.
+ *
+ * @p GPIO_EDGE_NONE     No edge detection; pin cannot trigger interrupts.
+ * @p GPIO_EDGE_RISING   Interrupt fires on low→high transition.
+ * @p GPIO_EDGE_FALLING  Interrupt fires on high→low transition.
+ * @p GPIO_EDGE_BOTH     Interrupt fires on any level change.
  */
 typedef enum {
   GPIO_EDGE_NONE = 0,
@@ -58,8 +76,12 @@ typedef enum {
 /**
  * @brief Pull-resistor configuration.
  *
- * @note Not all SoCs allow pull configuration via sysfs; this field
- *       is stored but not applied in the current implementation.
+ * @p GPIO_PULL_NONE  Floating; state is indeterminate when undriven.
+ * @p GPIO_PULL_UP    Weak pull to VCC; pin reads HIGH when undriven.
+ * @p GPIO_PULL_DOWN  Weak pull to GND; pin reads LOW when undriven.
+ *
+ * @note Not all SoCs allow pull configuration through sysfs.  This field
+ *       is stored in the config but not applied in the current implementation.
  */
 typedef enum {
   GPIO_PULL_NONE = 0,
@@ -71,6 +93,13 @@ typedef enum {
 
 /**
  * @brief Full configuration for a GPIO pin.
+ *
+ * @p pin_number     Hardware GPIO number; validated against
+ * GPIO_PIN_NUMBER_MAX.
+ * @p direction      Input or output at open time.
+ * @p initial_value  Logic level driven at open for output pins.
+ * @p edge           Edge-detection mode for interrupt-capable input pins.
+ * @p pull           Pull-resistor configuration (stored; may not be applied).
  */
 typedef struct {
   uint32_t pin_number;
@@ -84,6 +113,11 @@ typedef struct {
 
 /**
  * @brief Runtime snapshot of GPIO pin state.
+ *
+ * @p pin_number  Hardware GPIO number.
+ * @p direction   Current direction (may differ from config after control()).
+ * @p value       Most recently sampled logic level.
+ * @p edge        Active edge-detection mode.
  */
 typedef struct {
   uint32_t pin_number;
@@ -97,13 +131,14 @@ typedef struct {
 /**
  * @brief Commands accepted by the GPIO device control() operation.
  *
- *   GPIO_CMD_SET_DIRECTION — arg: const gpio_direction_t *
- *   GPIO_CMD_GET_DIRECTION — arg: gpio_direction_t *
- *   GPIO_CMD_SET_VALUE     — arg: const gpio_value_t *
- *   GPIO_CMD_GET_VALUE     — arg: gpio_value_t *
- *   GPIO_CMD_SET_EDGE      — arg: const gpio_edge_t *
- *   GPIO_CMD_GET_EDGE      — arg: gpio_edge_t *
- *   GPIO_CMD_WAIT_EDGE     — arg: const uint32_t *  (timeout ms; 0=infinite)
+ * @p GPIO_CMD_SET_DIRECTION  arg: const gpio_direction_t *
+ * @p GPIO_CMD_GET_DIRECTION  arg: gpio_direction_t *
+ * @p GPIO_CMD_SET_VALUE      arg: const gpio_value_t *
+ * @p GPIO_CMD_GET_VALUE      arg: gpio_value_t *
+ * @p GPIO_CMD_SET_EDGE       arg: const gpio_edge_t *
+ * @p GPIO_CMD_GET_EDGE       arg: gpio_edge_t *
+ * @p GPIO_CMD_WAIT_EDGE      arg: const uint32_t * (timeout ms; 0 = infinite)
+ * @p GPIO_CMD_TOGGLE         [PROPOSED] arg: NULL; flips the output level.
  */
 typedef enum {
   GPIO_CMD_SET_DIRECTION = 0x4000,
@@ -113,81 +148,34 @@ typedef enum {
   GPIO_CMD_SET_EDGE = 0x4004,
   GPIO_CMD_GET_EDGE = 0x4005,
   GPIO_CMD_WAIT_EDGE = 0x4006,
+  GPIO_CMD_TOGGLE = 0x4007, /* [PROPOSED] */
 } gpio_cmd_t;
 
 /* ── public API ───────────────────────────────────────────────────────── */
 
-/**
- * @brief Allocate and initialise a GPIO HAL device.
- *
- * Validates that @p gpio_config->pin_number is within
- * [0, GPIO_PIN_NUMBER_MAX] before any sysfs operations.
- *
- * @param device_name  Human-readable name for registry lookup.
- * @param gpio_config  Pin parameters; a copy is stored internally.
- * @return Initialised hw_device_t with ref_count=1, or NULL on error.
- */
+/** @brief Allocate and initialise a GPIO HAL device. */
 hw_device_t *gpio_hal_create(const char *device_name,
                              const gpio_config_t *gpio_config);
 
-/**
- * @brief Release all resources held by a GPIO device.
- *
- * Unexports the GPIO pin from sysfs so other processes can claim it.
- *
- * @param device_ptr  Device returned by @ref gpio_hal_create.
- */
+/** @brief Release all resources held by a GPIO device and unexport the pin. */
 void gpio_hal_destroy(hw_device_t *device_ptr);
 
-/**
- * @brief Return the default GPIO configuration for a pin number.
- *
- * Output, initially LOW, no edge detection, no pull resistor.
- *
- * @param pin_number  GPIO pin number.
- * @return Populated gpio_config_t; no heap allocation.
- */
+/** @brief Return the default GPIO configuration for a given pin number. */
 gpio_config_t gpio_hal_default_config(uint32_t pin_number);
 
-/**
- * @brief Drive an output pin to the specified logic level.
- *
- * @param device_ptr  Open GPIO device configured as output.
- * @param new_value   Desired logic level.
- * @return HAL_SUCCESS or HAL_ERROR_*.
- */
+/** @brief Drive an output pin to the specified logic level. */
 int gpio_hal_set_value(hw_device_t *device_ptr, gpio_value_t new_value);
 
-/**
- * @brief Sample the current logic level of a pin.
- *
- * @param device_ptr  Open GPIO device.
- * @param value_out   Receives the current logic level.
- * @return HAL_SUCCESS or HAL_ERROR_*.
- */
+/** @brief Sample the current logic level of a pin. */
 int gpio_hal_get_value(hw_device_t *device_ptr, gpio_value_t *value_out);
 
-/**
- * @brief Toggle an output pin between HIGH and LOW.
- *
- * Reads the current state and writes the opposite.
- *
- * @param device_ptr  Open GPIO device configured as output.
- * @return HAL_SUCCESS or HAL_ERROR_*.
- */
+/** @brief Toggle an output pin between HIGH and LOW. */
 int gpio_hal_toggle(hw_device_t *device_ptr);
 
-/**
- * @brief Block until the configured edge event fires or timeout expires.
- *
- * Uses poll(POLLPRI) to sleep in the kernel scheduler; CPU usage is zero
- * while waiting.  The caller must have configured a non-NONE edge in
- * @ref gpio_config_t before calling open().
- *
- * @param device_ptr  Open GPIO input device with edge detection configured.
- * @param timeout_ms  Maximum wait in milliseconds; 0 means wait forever.
- * @return HAL_SUCCESS on edge, HAL_ERROR_TIMEOUT, or HAL_ERROR_IO.
- */
+/** @brief Block until the configured edge event fires or timeout expires. */
 int gpio_hal_wait_interrupt(hw_device_t *device_ptr, uint32_t timeout_ms);
+
+/** @brief [PROPOSED] Fill a gpio_info_t with the current pin state. */
+int gpio_hal_get_info(hw_device_t *device_ptr, gpio_info_t *info_out);
 
 #endif /* GPIO_HAL_H */
