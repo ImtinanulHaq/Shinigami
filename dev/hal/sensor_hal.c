@@ -18,7 +18,6 @@
  *     /dev/iio:deviceN.
  */
 
-#define _DEFAULT_SOURCE
 #include "sensor_hal.h"
 
 #include <errno.h>
@@ -427,7 +426,7 @@ static int compute_iio_scan_layout(sensor_priv_t *priv, const char *prefix) {
  * @brief Enable IIO hardware buffer channels and open /dev/iio:deviceN.
  *
  * The IIO buffer pipeline:
- *   1. Enable each scan element (channel) via scan_elements/*_en = "1".
+ *   1. Enable each scan element (channel) via scan_elements/AXIS_en = "1".
  *   2. Set the kernel ring-buffer depth (buffer/length).
  *   3. Arm the buffer (buffer/enable = "1").
  *   4. Open /dev/iio:deviceN; each read() returns one complete scan.

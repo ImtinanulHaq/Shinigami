@@ -14,15 +14,143 @@
  *     and control commands; data-path read/write hold the read-side lock.
  */
 
-#define _DEFAULT_SOURCE
 #include "audio_hal.h"
 
-#include <alsa/asoundlib.h>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef HAVE_ALSA
+#include <alsa/asoundlib.h>
+#else
+/* ── ALSA stub types ──────────────────────────────────────────────────────
+ * These minimal typedefs allow the file to compile on systems without
+ * libasound-dev installed.  On a real embedded target, HAVE_ALSA will be
+ * defined by the build system and the real ALSA headers are used instead.
+ * ──────────────────────────────────────────────────────────────────────── */
+typedef void snd_pcm_t;
+typedef int snd_pcm_format_t;
+typedef int snd_pcm_stream_t;
+typedef unsigned long snd_pcm_uframes_t;
+typedef long snd_pcm_sframes_t;
+typedef void snd_pcm_hw_params_t;
+
+#define SND_PCM_STREAM_PLAYBACK 0
+#define SND_PCM_STREAM_CAPTURE 1
+#define SND_PCM_ACCESS_RW_INTERLEAVED 0
+#define SND_PCM_FORMAT_S16_LE 0
+#define SND_PCM_FORMAT_S24_LE 1
+#define SND_PCM_FORMAT_S32_LE 2
+#define SND_PCM_FORMAT_FLOAT_LE 3
+
+static inline int snd_pcm_open(snd_pcm_t **h, const char *n, int s, int m) {
+  (void)h;
+  (void)n;
+  (void)s;
+  (void)m;
+  return -1;
+}
+static inline int snd_pcm_close(snd_pcm_t *h) {
+  (void)h;
+  return 0;
+}
+static inline int snd_pcm_drain(snd_pcm_t *h) {
+  (void)h;
+  return 0;
+}
+static inline int snd_pcm_drop(snd_pcm_t *h) {
+  (void)h;
+  return 0;
+}
+static inline int snd_pcm_prepare(snd_pcm_t *h) {
+  (void)h;
+  return 0;
+}
+static inline int snd_pcm_hw_params_malloc(snd_pcm_hw_params_t **p) {
+  (void)p;
+  return -1;
+}
+static inline void snd_pcm_hw_params_free(snd_pcm_hw_params_t *p) { (void)p; }
+static inline int snd_pcm_hw_params_any(snd_pcm_t *h, snd_pcm_hw_params_t *p) {
+  (void)h;
+  (void)p;
+  return -1;
+}
+static inline int snd_pcm_hw_params_set_access(snd_pcm_t *h,
+                                               snd_pcm_hw_params_t *p, int a) {
+  (void)h;
+  (void)p;
+  (void)a;
+  return -1;
+}
+static inline int snd_pcm_hw_params_set_format(snd_pcm_t *h,
+                                               snd_pcm_hw_params_t *p, int f) {
+  (void)h;
+  (void)p;
+  (void)f;
+  return -1;
+}
+static inline int snd_pcm_hw_params_set_channels(snd_pcm_t *h,
+                                                 snd_pcm_hw_params_t *p,
+                                                 unsigned c) {
+  (void)h;
+  (void)p;
+  (void)c;
+  return -1;
+}
+static inline int snd_pcm_hw_params_set_rate_near(snd_pcm_t *h,
+                                                  snd_pcm_hw_params_t *p,
+                                                  unsigned *r, int *d) {
+  (void)h;
+  (void)p;
+  (void)r;
+  (void)d;
+  return -1;
+}
+static inline int snd_pcm_hw_params_set_period_size_near(snd_pcm_t *h,
+                                                         snd_pcm_hw_params_t *p,
+                                                         snd_pcm_uframes_t *f,
+                                                         int *d) {
+  (void)h;
+  (void)p;
+  (void)f;
+  (void)d;
+  return -1;
+}
+static inline int snd_pcm_hw_params_set_buffer_size_near(snd_pcm_t *h,
+                                                         snd_pcm_hw_params_t *p,
+                                                         snd_pcm_uframes_t *f) {
+  (void)h;
+  (void)p;
+  (void)f;
+  return -1;
+}
+static inline int snd_pcm_hw_params(snd_pcm_t *h, snd_pcm_hw_params_t *p) {
+  (void)h;
+  (void)p;
+  return -1;
+}
+static inline snd_pcm_sframes_t snd_pcm_readi(snd_pcm_t *h, void *b,
+                                              snd_pcm_uframes_t f) {
+  (void)h;
+  (void)b;
+  (void)f;
+  return -1;
+}
+static inline snd_pcm_sframes_t snd_pcm_writei(snd_pcm_t *h, const void *b,
+                                               snd_pcm_uframes_t f) {
+  (void)h;
+  (void)b;
+  (void)f;
+  return -1;
+}
+static inline const char *snd_strerror(int e) {
+  (void)e;
+  return "ALSA not available";
+}
+#endif /* HAVE_ALSA */
 
 /* ── private device data ──────────────────────────────────────────────── */
 

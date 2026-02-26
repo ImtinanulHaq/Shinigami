@@ -12,12 +12,11 @@
 #ifndef HAL_INTERFACE_H
 #define HAL_INTERFACE_H
 
-#define _DEFAULT_SOURCE /* expose explicit_bzero, glibc extensions */
-
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h> /* ssize_t */
 
 /* ── version ──────────────────────────────────────────────────────────── */
 
