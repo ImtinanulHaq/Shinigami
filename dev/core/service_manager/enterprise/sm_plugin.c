@@ -187,6 +187,10 @@ int sm_plugin_register_library(const char* name, const char* library_path,
 int sm_plugin_execute(const char* plugin_name, const char* argument,
                       char* output_buffer, int output_size)
 {
+    /* Mark unused parameters for future implementation */
+    (void)output_buffer;
+    (void)output_size;
+
     if (!g_plugin_system.initialized || !plugin_name) {
         return -1;
     }
