@@ -81,8 +81,10 @@ void sm_health_callbacks_check_all(void)
     count = g_callback_count;
     for (int i = 0; i < count; i++) {
         fns[i] = g_callbacks[i].fn;
-        strncpy(names[i], g_callbacks[i].service_name, 63);
-        names[i][63] = '\0';
+        /* Safe copy: both arrays are same size (64 bytes), guaranteed null termination */
+        size_t len = strnlen(g_callbacks[i].service_name, sizeof(g_callbacks[i].service_name) - 1);
+        memcpy(names[i], g_callbacks[i].service_name, len);
+        names[i][len] = '\0';
     }
     pthread_mutex_unlock(&cb_mutex);
     /* Step 2: Lock chhor di — ab koi bhi register/unregister kar sakta hai */

@@ -84,6 +84,9 @@ static void wq_init(work_queue_t *q, int queue_capacity) {
   memset(q, 0, sizeof(*q));
   q->capacity = queue_capacity;
   q->fds = calloc((size_t)queue_capacity, sizeof(int));
+  if (!q->fds) {
+    return;
+  }
   pthread_mutex_init(&q->mutex, NULL);
   pthread_cond_init(&q->cond, NULL);
 }
@@ -164,7 +167,10 @@ static int threadpool_init(void) {
   workers = calloc((size_t)pool_size, sizeof(pthread_t));
   if (!workers) {
     sm_log(SM_LOG_ERROR, "main: worker array allocation failed");
+    pthread_mutex_destroy(&work_queue.mutex);
+    pthread_cond_destroy(&work_queue.cond);
     free(work_queue.fds);
+    work_queue.fds = NULL;
     return -1;
   }
 
@@ -172,6 +178,16 @@ static int threadpool_init(void) {
     if (pthread_create(&workers[i], NULL, worker_thread, NULL) != 0) {
       sm_log(SM_LOG_ERROR, "main: pthread_create worker %d failed: %s", i,
              strerror(errno));
+      wq_shutdown(&work_queue);
+      for (int j = 0; j < i; j++) {
+        pthread_join(workers[j], NULL);
+      }
+      pthread_mutex_destroy(&work_queue.mutex);
+      pthread_cond_destroy(&work_queue.cond);
+      free(work_queue.fds);
+      work_queue.fds = NULL;
+      free(workers);
+      workers = NULL;
       return -1;
     }
   }
