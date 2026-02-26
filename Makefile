@@ -1,15 +1,14 @@
 CC       := gcc
 CFLAGS   := -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L \
-            -I./core \
-            -I./core/service_manager \
-            -I./core/service_manager/enterprise \
-            -I./core/service_manager/infrastructure \
-            -I./core/service_manager/security \
-            -I./core/service_manager/observability \
-            -I./core/service_manager/lifecycle
+            -I./dev/core \
+            -I./dev/core/service_manager \
+            -I./dev/core/service_manager/enterprise \
+            -I./dev/core/service_manager/infrastructure \
+            -I./dev/core/service_manager/security \
+            -I./dev/core/service_manager/observability \
+            -I./dev/core/service_manager/lifecycle
 LDFLAGS  := -lpthread
-
-SM_DIR   := core/service_manager
+SM_DIR   := dev/core/service_manager
 BUILD_DIR := build
 
 # ============================================================================

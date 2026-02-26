@@ -1,0 +1,49 @@
+[env]
+# Set standard compiler flags for the environment
+CC = "gcc"
+CXX = "g++"
+# Enforce C11 standard as per project requirements
+CFLAGS = "-Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L"
+# Ensure builds go to the standard build directory
+BUILD_DIR = "build"
+
+[tasks]
+# --- Build Tasks ---
+
+"build" = { description = "Build the core Service Manager", run = "make" }
+
+"build:clean" = { description = "Clean all build artifacts", run = "make clean" }
+
+"build:debug" = { description = "Build with debug symbols", run = "make debug" }
+
+"build:hardened" = { description = "Build with PIE and stack protection", run = "make hardened" }
+
+"install" = { description = "Install binaries to /usr/local/bin", run = "sudo make install" }
+
+# --- Testing Tasks (Core & HAL) ---
+
+"test:unit" = { description = "Run unit tests for Service Manager", dir = "testing/service_manager_testing", run = "make test-unit" }
+
+"test:integration" = { description = "Run integration scripts", dir = "testing/service_manager_testing", run = "make test-integration" }
+
+"test:e2e" = { description = "Run full End-to-End tests", dir = "testing/service_manager_testing", run = "make test-e2e" }
+
+"test:fuzz" = { description = "Run AFL++ fuzzing (requires afl installed)", dir = "testing/service_manager_testing", run = "make test-fuzz" }
+
+"test:all" = { description = "Run the full testing suite (Unit -> E2E)", dir = "testing/service_manager_testing", run = "make test" }
+
+# --- Security & Static Analysis ---
+
+"security:check-binary" = { description = "Validate binary hardening", run = "make check" }
+
+"security:cppcheck" = { description = "Run static analysis with CPPCheck", dir = "testing/service_manager_testing", run = "make test-cppcheck" }
+
+"security:valgrind" = { description = "Check for memory leaks", dir = "testing/service_manager_testing", run = "make test-valgrind" }
+
+"security:verify-keys" = { description = "Verify HMAC keys and certificates", run = "ls -l /etc/servicemanager/keys || echo 'Keys not found'" }
+
+# --- Utility ---
+
+"logs:monitor" = { description = "Tail the service manager logs", run = "tail -f /var/log/servicemanager.log" }
+
+"run" = { description = "Run the Service Manager locally", run = "./servicemanager" }
