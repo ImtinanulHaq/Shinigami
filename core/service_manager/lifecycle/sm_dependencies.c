@@ -189,6 +189,7 @@ int sm_deps_service_ready(const char* name)
 void sm_deps_cleanup(void)
 {
     pthread_mutex_lock(&g_deps.mutex);
-    memset(&g_deps, 0, sizeof(g_deps));
+    g_deps.count = 0;
+    memset(g_deps.deps, 0, sizeof(g_deps.deps));
     pthread_mutex_unlock(&g_deps.mutex);
 }
