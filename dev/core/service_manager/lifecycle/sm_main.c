@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 
 /*
  * sm_main.c - Service manager: entry point, event loop, thread pool, client

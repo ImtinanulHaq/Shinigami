@@ -1,13 +1,24 @@
 CC       := gcc
-CFLAGS   := -Wall -Wextra -O2 -D_POSIX_C_SOURCE=200809L \
+CFLAGS   := -Wall -Wextra -Wformat -Wformat-security \
+            -O2 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE \
+            -fstack-protector-strong -D_FORTIFY_SOURCE=2 \
+            -fPIE -fno-strict-aliasing \
             -I./dev/core \
             -I./dev/core/service_manager \
             -I./dev/core/service_manager/enterprise \
             -I./dev/core/service_manager/infrastructure \
             -I./dev/core/service_manager/security \
             -I./dev/core/service_manager/observability \
-            -I./dev/core/service_manager/lifecycle
-LDFLAGS  := -lpthread
+            -I./dev/core/service_manager/lifecycle \
+            -I./dev/security \
+            -I./dev/security/capabilities \
+            -I./dev/security/sandbox \
+            -I./dev/security/seccomp \
+            -I./dev/security/verify \
+            -I./dev/security/core \
+            -I./dev/hal
+LDFLAGS  := -lpthread -lseccomp -lasound -pie \
+            -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
 SM_DIR   := dev/core/service_manager
 BUILD_DIR := build
 
@@ -42,6 +53,38 @@ SM_SECURITY := $(SM_DIR)/security/sm_crypto.c \
                $(SM_DIR)/security/sm_advanced_ratelimit.c \
                $(SM_DIR)/security/sm_security.c
 
+# Platform Security Layer (Capabilities, sandbox, seccomp, verify)
+SEC_DIR := dev/security
+PLATFORM_SECURITY := $(SEC_DIR)/capabilities/capabilities.c \
+                     $(SEC_DIR)/capabilities/capabilities_audit.c \
+                     $(SEC_DIR)/capabilities/capabilities_core.c \
+                     $(SEC_DIR)/capabilities/capabilities_policy.c \
+                     $(SEC_DIR)/sandbox/sandbox.c \
+                     $(SEC_DIR)/sandbox/sandbox_cgroup.c \
+                     $(SEC_DIR)/sandbox/sandbox_core.c \
+                     $(SEC_DIR)/sandbox/sandbox_mount.c \
+                     $(SEC_DIR)/sandbox/sandbox_network.c \
+                     $(SEC_DIR)/seccomp/seccomp_filter.c \
+                     $(SEC_DIR)/seccomp/seccomp_core.c \
+                     $(SEC_DIR)/seccomp/seccomp_policy_audio.c \
+                     $(SEC_DIR)/seccomp/seccomp_policy_camera.c \
+                     $(SEC_DIR)/seccomp/seccomp_policy_sensor.c \
+                     $(SEC_DIR)/seccomp/seccomp_policy_network.c \
+                     $(SEC_DIR)/seccomp/seccomp_policy_minimal.c \
+                     $(SEC_DIR)/verify/verify.c \
+                     $(SEC_DIR)/verify/verify_hmac.c \
+                     $(SEC_DIR)/verify/verify_replay.c \
+                     $(SEC_DIR)/verify/verify_token.c \
+                     $(SEC_DIR)/core/security_manager.c
+
+# HAL Layer (Hardware Abstraction)
+HAL_DIR := dev/hal
+HAL_SRCS := $(HAL_DIR)/hal_interface.c \
+            $(HAL_DIR)/audio_hal.c \
+            $(HAL_DIR)/camera_hal.c \
+            $(HAL_DIR)/gpio_hal.c \
+            $(HAL_DIR)/sensor_hal.c
+
 # Observability Layer (Health, monitoring, logging, audit)
 SM_OBSERVABILITY := $(SM_DIR)/observability/sm_health.c \
                     $(SM_DIR)/observability/sm_health_callbacks.c \
@@ -60,7 +103,8 @@ SM_LIFECYCLE := $(SM_DIR)/lifecycle/sm_main.c \
                 $(SM_DIR)/lifecycle/sm_persistence.c
 
 # Aggregate all sources
-SM_SRCS  := $(SM_ENTERPRISE) $(SM_INFRASTRUCTURE) $(SM_SECURITY) $(SM_OBSERVABILITY) $(SM_LIFECYCLE)
+SM_SRCS  := $(SM_ENTERPRISE) $(SM_INFRASTRUCTURE) $(SM_SECURITY) $(SM_OBSERVABILITY) $(SM_LIFECYCLE) \
+            $(PLATFORM_SECURITY) $(HAL_SRCS)
 
 SM_OBJS  := $(patsubst %.c, $(BUILD_DIR)/%.o, $(SM_SRCS))
 TARGET   := servicemanager
@@ -79,6 +123,12 @@ $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)/$(SM_DIR)/security
 	@mkdir -p $(BUILD_DIR)/$(SM_DIR)/observability
 	@mkdir -p $(BUILD_DIR)/$(SM_DIR)/lifecycle
+	@mkdir -p $(BUILD_DIR)/$(SEC_DIR)/capabilities
+	@mkdir -p $(BUILD_DIR)/$(SEC_DIR)/sandbox
+	@mkdir -p $(BUILD_DIR)/$(SEC_DIR)/seccomp
+	@mkdir -p $(BUILD_DIR)/$(SEC_DIR)/verify
+	@mkdir -p $(BUILD_DIR)/$(SEC_DIR)/core
+	@mkdir -p $(BUILD_DIR)/$(HAL_DIR)
 
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
@@ -117,4 +167,11 @@ help:
 	@echo "  make check   - Validate binary"
 	@echo "  make install - Install to /usr/local/bin"
 
-.PHONY: all debug hardened check clean install help
+.PHONY: all debug hardened check clean install help analyze
+
+analyze:
+	@echo "$(YELLOW)[ANALYZE]$(RESET) Running static analysis..."
+	@cppcheck --enable=all --std=c11 --suppress=missingIncludeSystem \
+		-I./dev/core -I./dev/security -I./dev/hal \
+		$(SM_SRCS) 2>&1 | head -50 || true
+	@echo "$(GREEN)✓ Static analysis complete$(RESET)"
