@@ -7,11 +7,12 @@
  * STRESS_DURATION seconds.  Asserts zero data loss and zero
  * registry corruption.
  */
-#include "../../framework/unity.h"
-#include "../../framework/unity_fixture.h"
-#include "../../helpers/assert_extras.h"
-#include "../../helpers/test_utils.h"
-#include "../../mocks/mock_hal.h"
+#include "../framework/unity.h"
+#include "../framework/unity_fixture.h"
+#include "../helpers/assert_extras.h"
+#include "../helpers/test_utils.h"
+#include "../mocks/mock_hal.h"
+#include "../../../dev/hal/interface/hal_interface.h"
 
 #include "../../../dev/core/ring_buffer.h"
 #include "../../../dev/core/service_manager/infrastructure/sm_registry.h"
@@ -28,7 +29,7 @@
 #endif
 
 #define N_SERVICES   4
-#define RB_CAPACITY  4096
+#define RB_CAPACITY  RING_BUFFER_MAX_CAPACITY  /* max allowed = 1024 */
 #define ITEM_SIZE    64
 
 typedef struct {
@@ -53,6 +54,9 @@ typedef struct {
     tu_counter_t *ops;
 } fs_sm_arg_t;
 
+/* Mutex to serialise concurrent ring_buffer_write (SPMC not MPMC) */
+static pthread_mutex_t g_fs_write_mu = PTHREAD_MUTEX_INITIALIZER;
+
 static void *fs_producer(void *arg)
 {
     fs_prod_arg_t *a = (fs_prod_arg_t *)arg;
@@ -62,7 +66,10 @@ static void *fs_producer(void *arg)
     while (!*a->stop) {
         tu_rand_fill(buf, sizeof(buf), seed++);
         mock_hal_read(&a->hal, buf, sizeof(buf));
-        if (ring_buffer_write(a->rb, buf) == RB_SUCCESS)
+        pthread_mutex_lock(&g_fs_write_mu);
+        int rbr = ring_buffer_write(a->rb, buf);
+        pthread_mutex_unlock(&g_fs_write_mu);
+        if (rbr == RB_SUCCESS)
             tu_counter_inc(a->produced);
     }
     return NULL;
@@ -74,7 +81,10 @@ static void *fs_consumer(void *arg)
     tu_barrier_wait(a->barrier);
     uint8_t buf[ITEM_SIZE];
     while (!*a->stop || !ring_buffer_is_empty(a->rb)) {
-        if (ring_buffer_read(a->rb, buf) == RB_SUCCESS)
+        pthread_mutex_lock(&g_fs_write_mu);
+        int frr = ring_buffer_read(a->rb, buf);
+        pthread_mutex_unlock(&g_fs_write_mu);
+        if (frr == RB_SUCCESS)
             tu_counter_inc(a->consumed);
     }
     return NULL;
@@ -85,7 +95,7 @@ static void *fs_sm_worker(void *arg)
     fs_sm_arg_t *a = (fs_sm_arg_t *)arg;
     tu_barrier_wait(a->barrier);
 
-    char name[SM_MAX_SERVICE_NAME];
+    char name[SM_MAX_NAME];
     snprintf(name, sizeof(name), "fs_svc_%d", a->id);
 
     while (!*a->stop) {
@@ -94,7 +104,7 @@ static void *fs_sm_worker(void *arg)
         strncpy(e.name, name, sizeof(e.name) - 1);
         snprintf(e.socket_path, sizeof(e.socket_path), "/tmp/fs%d.sock", a->id);
         e.pid    = (pid_t)(20000 + a->id);
-        e.status = SERVICE_STATUS_RUNNING;
+        e.status = SERVICE_RUNNING;
 
         if (sm_registry_add(&e) == 0) {
             tu_counter_inc(a->ops);
@@ -117,7 +127,7 @@ TEST_SETUP(StressFullSystem)
     for (int i = 0; i < N_SERVICES; i++) {
         mock_hal_reset(&g_hals[i]);
         g_hals[i].open_ret = g_hals[i].read_ret = HAL_SUCCESS;
-        mock_hal_open(&g_hals[i], "stress_dev");
+        mock_hal_open(&g_hals[i]);
     }
 }
 

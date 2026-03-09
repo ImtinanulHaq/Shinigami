@@ -132,16 +132,13 @@ TEST(MemPool_IOUring, FillAndDrain_NoLeak)
         written++;
     }
 
-    void *tmp = pool_alloc(&g_pool);
-
-    for (int i = 0; i < written; i++) {
-        if (!tmp) { tmp = pool_alloc(&g_pool); }
-        if (!tmp) continue;
-        ring_buffer_read(g_rb, tmp);
-        pool_free(&g_pool, tmp);
-        tmp = NULL;
+    /* Drain ring buffer into a stack buffer (no pool needed for drain) */
+    {
+        uint8_t drain_buf[BLOCK_SIZE];
+        while (!ring_buffer_is_empty(g_rb)) {
+            ring_buffer_read(g_rb, drain_buf);
+        }
     }
-    if (tmp) pool_free(&g_pool, tmp);
 
     for (int i = 0; i < written; i++) if (ptrs[i]) pool_free(&g_pool, ptrs[i]);
 
@@ -158,6 +155,9 @@ typedef struct {
     tu_barrier_t  *barrier;
 } mp_thread_arg_t;
 
+/* Mutex to serialise concurrent ring_buffer_write calls (SPMC, not MPMC) */
+static pthread_mutex_t g_mp_write_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 static void *mp_producer(void *arg)
 {
     mp_thread_arg_t *a = (mp_thread_arg_t *)arg;
@@ -166,7 +166,13 @@ static void *mp_producer(void *arg)
         void *blk = pool_alloc(a->pool);
         if (!blk) continue;
         memset(blk, (uint8_t)i, BLOCK_SIZE);
-        while (ring_buffer_write(a->rb, blk) != RB_SUCCESS) tu_sleep_ms(1);
+        pthread_mutex_lock(&g_mp_write_mutex);
+        while (ring_buffer_write(a->rb, blk) != RB_SUCCESS) {
+            pthread_mutex_unlock(&g_mp_write_mutex);
+            tu_sleep_ms(1);
+            pthread_mutex_lock(&g_mp_write_mutex);
+        }
+        pthread_mutex_unlock(&g_mp_write_mutex);
     }
     return NULL;
 }

@@ -15,6 +15,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <stdatomic.h>
 
 #ifdef __cplusplus
 extern "C" {

@@ -47,7 +47,7 @@ static void fuzz_one(const uint8_t *data, size_t size)
             memcpy(&cfg, data + pos, sizeof(cfg));
             pos += sizeof(cfg);
         } else {
-            cfg = audio_hal_default_config();
+            cfg = audio_hal_default_config(AUDIO_DIRECTION_CAPTURE);
         }
         hw_device_t *d = audio_hal_create(name, path, &cfg);
         if (d) audio_hal_destroy(d);
@@ -73,7 +73,7 @@ static void fuzz_one(const uint8_t *data, size_t size)
             memcpy(&cfg, data + pos, sizeof(cfg));
             pos += sizeof(cfg);
         } else {
-            cfg = sensor_hal_default_config();
+            cfg = sensor_hal_default_config(SENSOR_TYPE_ACCEL);
         }
         hw_device_t *d = sensor_hal_create(name, path, &cfg);
         if (d) sensor_hal_destroy(d);
@@ -87,9 +87,9 @@ static void fuzz_one(const uint8_t *data, size_t size)
             memcpy(&cfg, data + pos, sizeof(cfg)); pos += sizeof(cfg);
             memcpy(&pin, data + pos, sizeof(pin)); pos += sizeof(pin);
         } else {
-            cfg = gpio_hal_default_config();
+            cfg = gpio_hal_default_config(0);
         }
-        hw_device_t *d = gpio_hal_create(name, pin, &cfg);
+        hw_device_t *d = gpio_hal_create(name, &cfg);
         if (d) gpio_hal_destroy(d);
     }
 

@@ -6,10 +6,10 @@
  * then verify that the final count matches expectations and no
  * internal invariant is violated.
  */
-#include "../../framework/unity.h"
-#include "../../framework/unity_fixture.h"
-#include "../../helpers/assert_extras.h"
-#include "../../helpers/test_utils.h"
+#include "../framework/unity.h"
+#include "../framework/unity_fixture.h"
+#include "../helpers/assert_extras.h"
+#include "../helpers/test_utils.h"
 
 #include "../../../dev/core/service_manager/infrastructure/sm_registry.h"
 #include "../../../dev/core/service_manager/infrastructure/sm_protocol.h"
@@ -23,7 +23,7 @@
 #define STRESS_DURATION_SEC 60
 #endif
 
-#define N_THREADS    8
+#define N_THREADS    100
 
 typedef struct {
     int           id;
@@ -39,7 +39,7 @@ static void *sm_stress_thread(void *arg)
     sm_stress_arg_t *a = (sm_stress_arg_t *)arg;
     tu_barrier_wait(a->barrier);
 
-    char name[SM_MAX_SERVICE_NAME];
+    char name[SM_MAX_NAME];
     snprintf(name, sizeof(name), "stress_svc_%d", a->id);
 
     while (!*a->stop) {
@@ -48,7 +48,7 @@ static void *sm_stress_thread(void *arg)
         strncpy(e.name, name, sizeof(e.name) - 1);
         snprintf(e.socket_path, sizeof(e.socket_path), "/tmp/ss%d.sock", a->id);
         e.pid    = (pid_t)(10000 + a->id);
-        e.status = SERVICE_STATUS_RUNNING;
+        e.status = SERVICE_RUNNING;
 
         int r = sm_registry_add(&e);
         if (r == 0) {

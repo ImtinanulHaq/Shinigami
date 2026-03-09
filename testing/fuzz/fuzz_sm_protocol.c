@@ -2,14 +2,8 @@
  * @file fuzz_sm_protocol.c
  * @brief Fuzzer for the Service Manager protocol parser.
  *
- * Compilation (LibFuzzer):
- *   clang -fsanitize=fuzzer,address,undefined -g -O1 \
- *         fuzz_sm_protocol.c <sm_protocol_objs> -o fuzz_sm_protocol
- *
- * Standalone (no LibFuzzer / GCC):
- *   Define FUZZ_STANDALONE and FUZZ_ITERATIONS (default 100000).
- *   gcc -DFUZZ_STANDALONE -fsanitize=address,undefined -g -O0 \
- *       fuzz_sm_protocol.c <sm_protocol_objs> -o fuzz_sm_protocol
+ * Standalone (gcc): -DFUZZ_STANDALONE -DFUZZ_ITERATIONS=1000000
+ * LibFuzzer (clang): -fsanitize=fuzzer,address,undefined
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -19,85 +13,73 @@
 
 #include "../../../dev/core/service_manager/infrastructure/sm_protocol.h"
 
-/* ── Fuzz target: feed arbitrary bytes to every protocol validator ── */
+#ifndef FUZZ_ITERATIONS
+# define FUZZ_ITERATIONS 1000000
+#endif
 
 static void fuzz_one(const uint8_t *data, size_t size)
 {
-    if (size < sizeof(sm_message_header_t)) return;
+    if (size < sizeof(sm_hdr_t)) return;
 
-    const sm_message_header_t *hdr = (const sm_message_header_t *)data;
+    const sm_hdr_t *hdr = (const sm_hdr_t *)data;
 
-    /* These must never crash regardless of input */
+    /* Validation functions must never crash regardless of input */
     sm_validate_header(hdr, size);
 
-    if (size > sizeof(sm_message_header_t)) {
-        /* Try treating the payload as a service name */
-        char name[SM_MAX_SERVICE_NAME + 4];
-        size_t copy_len = size - sizeof(sm_message_header_t);
-        if (copy_len > sizeof(name) - 1) copy_len = sizeof(name) - 1;
-        memcpy(name, data + sizeof(sm_message_header_t), copy_len);
-        name[copy_len] = '\0';
+    if (size > sizeof(sm_hdr_t)) {
+        size_t pay_len = size - sizeof(sm_hdr_t);
+
+        /* Try as service name */
+        char name[SM_MAX_NAME + 4];
+        size_t copy = pay_len < sizeof(name)-1 ? pay_len : sizeof(name)-1;
+        memcpy(name, data + sizeof(sm_hdr_t), copy);
+        name[copy] = '\0';
         sm_validate_service_name(name);
 
-        /* And as a socket path */
-        char path[SM_MAX_SOCKET_PATH + 4];
-        if (copy_len > sizeof(path) - 1) copy_len = sizeof(path) - 1;
-        memcpy(path, data + sizeof(sm_message_header_t), copy_len);
-        path[copy_len] = '\0';
+        /* Try as socket path */
+        char path[SM_MAX_PATH + 4];
+        copy = pay_len < sizeof(path)-1 ? pay_len : sizeof(path)-1;
+        memcpy(path, data + sizeof(sm_hdr_t), copy);
+        path[copy] = '\0';
         sm_validate_socket_path(path);
 
-        /* And as a message size */
+        /* Try as message-size check with each known message type */
         uint32_t sz;
-        if (size >= sizeof(sm_message_header_t) + sizeof(uint32_t))
-            memcpy(&sz, data + sizeof(sm_message_header_t), sizeof(sz));
+        if (size >= sizeof(sm_hdr_t) + sizeof(uint32_t))
+            memcpy(&sz, data + sizeof(sm_hdr_t), sizeof(sz));
         else
             sz = (uint32_t)size;
-        sm_validate_message_size(sz);
+
+        sm_validate_message_size(sz, SM_MSG_REGISTER);
+        sm_validate_message_size(sz, SM_MSG_LOOKUP);
+        sm_validate_message_size(sz, SM_MSG_HEARTBEAT);
+        sm_validate_message_size(sz, hdr->type);
     }
 }
 
-/* ── LibFuzzer entry point ─────────────────────────────────────────── */
-
-#ifndef FUZZ_STANDALONE
-
+#ifdef FUZZ_STANDALONE
+int main(void)
+{
+    srand(42);
+    unsigned long long count = 0;
+    printf("fuzz_sm_protocol: starting %d iterations\n", FUZZ_ITERATIONS);
+    for (int i = 0; i < FUZZ_ITERATIONS; i++) {
+        size_t sz = (size_t)(rand() % 512);
+        uint8_t *buf = (uint8_t *)malloc(sz + 1);
+        if (!buf) continue;
+        for (size_t j = 0; j < sz; j++) buf[j] = (uint8_t)(rand() & 0xFF);
+        fuzz_one(buf, sz);
+        free(buf);
+        count++;
+    }
+    printf("fuzz_sm_protocol: PASSED  iterations=%llu  no crashes\n", count);
+    return 0;
+}
+#else
+/* LibFuzzer entry point */
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     fuzz_one(data, size);
     return 0;
 }
-
-#else /* FUZZ_STANDALONE */
-
-#ifndef FUZZ_ITERATIONS
-#define FUZZ_ITERATIONS 100000
 #endif
-
-static uint32_t xorshift(uint32_t *state)
-{
-    *state ^= *state << 13;
-    *state ^= *state >> 17;
-    *state ^= *state << 5;
-    return *state;
-}
-
-int main(void)
-{
-    uint32_t rng = 0xDEADBEEF;
-    uint8_t  buf[SM_MAX_MESSAGE_SIZE + 16];
-    long     iter = FUZZ_ITERATIONS;
-    const char *env = getenv("FUZZ_ITERATIONS");
-    if (env) iter = atol(env);
-
-    printf("[fuzz_sm_protocol] running %ld iterations\n", iter);
-
-    for (long i = 0; i < iter; i++) {
-        size_t len = (xorshift(&rng) % (sizeof(buf))) + 1;
-        for (size_t j = 0; j < len; j++) buf[j] = (uint8_t)xorshift(&rng);
-        fuzz_one(buf, len);
-    }
-
-    printf("[fuzz_sm_protocol] done — no crashes\n");
-    return 0;
-}
-
-#endif /* FUZZ_STANDALONE */

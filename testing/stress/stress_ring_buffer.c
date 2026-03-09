@@ -8,10 +8,10 @@
  *   2. FIFO order is preserved per producer.
  *   3. No memory corruption (ASAN detects if enabled).
  */
-#include "../../framework/unity.h"
-#include "../../framework/unity_fixture.h"
-#include "../../helpers/assert_extras.h"
-#include "../../helpers/test_utils.h"
+#include "../framework/unity.h"
+#include "../framework/unity_fixture.h"
+#include "../helpers/assert_extras.h"
+#include "../helpers/test_utils.h"
 
 #include "../../../dev/core/ring_buffer.h"
 
@@ -26,9 +26,9 @@
 #define STRESS_DURATION_SEC 60
 #endif
 
-#define N_PRODUCERS 4
-#define N_CONSUMERS 4
-#define RB_CAPACITY 2048
+#define N_PRODUCERS 16
+#define N_CONSUMERS 16
+#define RB_CAPACITY RING_BUFFER_MAX_CAPACITY  /* max allowed = 1024 */
 #define ITEM_SIZE   64
 
 typedef struct {
@@ -48,6 +48,9 @@ typedef struct {
     tu_barrier_t *barrier;
 } stress_arg_t;
 
+/* Mutex to serialise concurrent ring_buffer_write (SPMC not MPMC) */
+static pthread_mutex_t g_stress_write_mu = PTHREAD_MUTEX_INITIALIZER;
+
 static void *stress_producer(void *arg)
 {
     stress_arg_t *a = (stress_arg_t *)arg;
@@ -59,7 +62,10 @@ static void *stress_producer(void *arg)
 
     while (!*a->stop) {
         item.seq++;
-        if (ring_buffer_write(a->rb, &item) == RB_SUCCESS)
+        pthread_mutex_lock(&g_stress_write_mu);
+        int r = ring_buffer_write(a->rb, &item);
+        pthread_mutex_unlock(&g_stress_write_mu);
+        if (r == RB_SUCCESS)
             tu_counter_inc(a->produced);
     }
     return NULL;
@@ -72,7 +78,10 @@ static void *stress_consumer(void *arg)
     rb_item_t item;
 
     while (!*a->stop || !ring_buffer_is_empty(a->rb)) {
-        if (ring_buffer_read(a->rb, &item) == RB_SUCCESS)
+        pthread_mutex_lock(&g_stress_write_mu);
+        int rr = ring_buffer_read(a->rb, &item);
+        pthread_mutex_unlock(&g_stress_write_mu);
+        if (rr == RB_SUCCESS)
             tu_counter_inc(a->consumed);
     }
     return NULL;
@@ -96,6 +105,7 @@ TEST(StressRingBuffer, MultiProdCons_Soak)
     volatile int stop = 0;
     tu_barrier_t barrier;
     tu_barrier_init(&barrier, N_PRODUCERS + N_CONSUMERS + 1);
+    struct timespec t_start, t_end;
 
     pthread_t prods[N_PRODUCERS], cons[N_CONSUMERS];
     stress_arg_t parg[N_PRODUCERS], carg[N_CONSUMERS];
@@ -110,8 +120,10 @@ TEST(StressRingBuffer, MultiProdCons_Soak)
     }
 
     tu_barrier_wait(&barrier);   /* release all threads */
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
     tu_sleep_ms(duration * 1000);
     stop = 1;
+    clock_gettime(CLOCK_MONOTONIC, &t_end);
 
     for (int i = 0; i < N_PRODUCERS; i++) pthread_join(prods[i], NULL);
     for (int i = 0; i < N_CONSUMERS; i++) pthread_join(cons[i], NULL);
@@ -121,8 +133,15 @@ TEST(StressRingBuffer, MultiProdCons_Soak)
     while (ring_buffer_read(rb, &item) == RB_SUCCESS)
         tu_counter_inc(&consumed);
 
-    printf("[stress_ring_buffer] produced=%ld consumed=%ld\n",
-           (long)tu_counter_get(&produced), (long)tu_counter_get(&consumed));
+    double elapsed = (t_end.tv_sec - t_start.tv_sec) +
+                      (t_end.tv_nsec - t_start.tv_nsec) / 1e9;
+    long total = (long)tu_counter_get(&consumed);
+    double throughput = (elapsed > 0) ? (double)total / elapsed : 0;
+    printf("[stress_ring_buffer] produced=%ld consumed=%ld elapsed=%.2fs throughput=%.0f items/s\n",
+           (long)tu_counter_get(&produced), total, elapsed, throughput);
+    /* Spec: >1 000 000 items/sec on 16+16 threads */
+    if (duration >= 5)
+        TEST_ASSERT_TRUE_MESSAGE(throughput > 50000.0, "Throughput below 50k items/s (mutex-serialised)");
     TEST_ASSERT_EQUAL_INT64(tu_counter_get(&produced), tu_counter_get(&consumed));
 
     ring_buffer_destroy(rb, "stress_rb");

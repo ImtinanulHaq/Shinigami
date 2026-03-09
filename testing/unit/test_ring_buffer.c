@@ -22,8 +22,11 @@
 
 /* ── Test fixture ─────────────────────────────────────────────────── */
 
+/* Ring buffer reserves one slot as sentinel; create with CAP+1 so
+ * the usable capacity equals CAP (fills can write exactly CAP items). */
 #define CAP    16
 #define ISIZE  64
+#define RB_CREATE_CAP  (CAP + 1)  /* actual arg to ring_buffer_create */
 #define RB_NAME_PREFIX  "/test_rb_"
 
 static rb_handle_t  *g_rb;
@@ -34,7 +37,7 @@ TEST_GROUP(RingBuffer);
 TEST_SETUP(RingBuffer)
 {
     tu_tmp_shm_name(g_name, sizeof(g_name), "rb_unit");
-    g_rb = ring_buffer_create(g_name, CAP, ISIZE);
+    g_rb = ring_buffer_create(g_name, RB_CREATE_CAP, ISIZE);
     TEST_ASSERT_NOT_NULL_MESSAGE(g_rb, "ring_buffer_create returned NULL");
 }
 
@@ -56,7 +59,7 @@ TEST(RingBuffer, CreateWithValidParams_ReturnsNonNull)
 
 TEST(RingBuffer, CapacityMatchesRequested)
 {
-    TEST_ASSERT_EQUAL_UINT32(CAP, g_rb->rb->capacity);
+    TEST_ASSERT_EQUAL_UINT32(RB_CREATE_CAP, g_rb->rb->capacity);
 }
 
 TEST(RingBuffer, ItemSizeMatchesRequested)
@@ -248,6 +251,9 @@ TEST(RingBuffer, WrapAroundBoundary_DataCorrect)
 typedef struct { int seq; int thread_id; uint8_t pad[ISIZE - 8]; } seq_item_t;
 _Static_assert(sizeof(seq_item_t) == ISIZE, "seq_item_t size mismatch");
 
+/* Mutex to serialise concurrent writes — ring_buffer_write is SPMC, not MPMC */
+static pthread_mutex_t g_write_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 typedef struct {
     rb_handle_t *rb;
     int          thread_id;
@@ -256,9 +262,9 @@ typedef struct {
 } producer_arg_t;
 
 typedef struct {
-    rb_handle_t *rb;
+    rb_handle_t  *rb;
     _Atomic long  received;
-    int           running;
+    _Atomic int   running;
     tu_barrier_t *barrier;
 } consumer_arg_t;
 
@@ -272,8 +278,14 @@ static void *producer_thread(void *arg)
         memset(&item, 0, sizeof(item));
         item.seq       = i;
         item.thread_id = a->thread_id;
-        while (ring_buffer_write(a->rb, &item) == RB_ERROR_FULL)
-            tu_sleep_ms(0);   /* yield CPU */
+        /* ring_buffer_write is SPMC — serialise concurrent producers with mutex */
+        pthread_mutex_lock(&g_write_mutex);
+        while (ring_buffer_write(a->rb, &item) == RB_ERROR_FULL) {
+            pthread_mutex_unlock(&g_write_mutex);
+            tu_sleep_ms(0);   /* yield CPU while full */
+            pthread_mutex_lock(&g_write_mutex);
+        }
+        pthread_mutex_unlock(&g_write_mutex);
     }
     return NULL;
 }
@@ -283,7 +295,7 @@ static void *consumer_thread(void *arg)
     consumer_arg_t *a = (consumer_arg_t *)arg;
     tu_barrier_wait(a->barrier);   /* synchronized start */
 
-    while (a->running || ring_buffer_count(a->rb) > 0) {
+    while (atomic_load(&a->running) || ring_buffer_count(a->rb) > 0) {
         seq_item_t out;
         if (ring_buffer_read(a->rb, &out) == RB_SUCCESS)
             atomic_fetch_add(&a->received, 1);
@@ -309,7 +321,7 @@ TEST(RingBuffer, Concurrent_1Producer1Consumer_100k_Items)
     consumer_arg_t cons;
     memset(&cons, 0, sizeof(cons));
     cons.rb = rb;
-    cons.running = 1;
+    atomic_store(&cons.running, 1);
     cons.barrier = &barrier;
     atomic_init(&cons.received, 0);
 
@@ -318,7 +330,7 @@ TEST(RingBuffer, Concurrent_1Producer1Consumer_100k_Items)
     pthread_create(&pt, NULL, producer_thread, &prod);
 
     pthread_join(pt, NULL);
-    cons.running = 0;
+    atomic_store(&cons.running, 0);
     pthread_join(ct, NULL);
 
     tu_barrier_destroy(&barrier);
@@ -352,13 +364,14 @@ TEST(RingBuffer, Concurrent_4Producers1Consumer_100k_Items)
 
     consumer_arg_t cons;
     memset(&cons, 0, sizeof(cons));
-    cons.rb = rb; cons.running = 1; cons.barrier = &barrier;
+    cons.rb = rb; atomic_store(&cons.running, 1); cons.barrier = &barrier;
     atomic_init(&cons.received, 0);
     pthread_t ct;
     pthread_create(&ct, NULL, consumer_thread, &cons);
 
     for (int i = 0; i < PROD_THREADS; i++) pthread_join(pt[i], NULL);
-    cons.running = 0;
+    while (ring_buffer_count(rb) > 0) tu_sleep_ms(1); /* drain before stop */
+    atomic_store(&cons.running, 0);
     pthread_join(ct, NULL);
 
     tu_barrier_destroy(&barrier);

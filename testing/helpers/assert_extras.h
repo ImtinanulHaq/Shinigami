@@ -16,6 +16,8 @@
 #include <errno.h>
 #include <time.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <fcntl.h>
 
 /* ── Error code assertion ─────────────────────────────────────────── */
 
@@ -173,9 +175,5 @@ static inline int count_open_fds(void)
             TEST_FAIL_MESSAGE(_buf); \
         } \
     } while (0)
-
-/* Bring in DIR / dirent for count_open_fds */
-#include <dirent.h>
-#include <fcntl.h>
 
 #endif /* ASSERT_EXTRAS_H */

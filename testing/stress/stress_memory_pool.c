@@ -5,10 +5,10 @@
  * Many threads repeatedly allocate all pool blocks then free them,
  * checking stats consistency and absence of double-free / leak.
  */
-#include "../../framework/unity.h"
-#include "../../framework/unity_fixture.h"
-#include "../../helpers/assert_extras.h"
-#include "../../helpers/test_utils.h"
+#include "../framework/unity.h"
+#include "../framework/unity_fixture.h"
+#include "../helpers/assert_extras.h"
+#include "../helpers/test_utils.h"
 
 #include <pthread.h>
 #include <stdlib.h>

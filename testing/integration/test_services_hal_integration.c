@@ -21,7 +21,7 @@
 
 /* Simulated service context */
 typedef struct {
-    mock_hal_state_t hal;
+    mock_hal_state_t *hal;   /* points to global g_state in mock_hal.c */
     service_entry_t  entry;
     int              running;
     int              frames_read;
@@ -33,16 +33,17 @@ static fake_service_t g_svc;
 static void fake_service_init(fake_service_t *s, const char *name,
                                const char *sock, pid_t pid)
 {
-    mock_hal_reset(&s->hal);
-    s->hal.open_ret  = HAL_SUCCESS;
-    s->hal.close_ret = HAL_SUCCESS;
-    s->hal.read_ret  = HAL_SUCCESS;
+    s->hal = mock_hal_get_state();
+    mock_hal_reset(s->hal);
+    s->hal->open_ret  = HAL_SUCCESS;
+    s->hal->close_ret = HAL_SUCCESS;
+    s->hal->read_ret  = HAL_SUCCESS;
 
     memset(&s->entry, 0, sizeof(s->entry));
     strncpy(s->entry.name,        name, sizeof(s->entry.name) - 1);
     strncpy(s->entry.socket_path, sock, sizeof(s->entry.socket_path) - 1);
     s->entry.pid    = pid;
-    s->entry.status = SERVICE_STATUS_STOPPED;
+    s->entry.status = SERVICE_STOPPED;
     s->running      = 0;
     s->frames_read  = 0;
 }
@@ -53,13 +54,13 @@ static void *service_loop(void *arg)
     fake_service_t *s = (fake_service_t *)arg;
     uint8_t buf[128];
     while (s->running) {
-        int r = mock_hal_read(&s->hal, buf, sizeof(buf));
+        int r = mock_hal_read(s->hal, buf, sizeof(buf));
         if (r == HAL_SUCCESS) {
             s->frames_read++;
             sm_registry_update_heartbeat(s->entry.name);
         } else {
             s->running = 0;
-            sm_registry_update_status(s->entry.name, SERVICE_STATUS_STOPPED);
+            sm_registry_update_status(s->entry.name, SERVICE_STOPPED);
             break;
         }
         tu_sleep_ms(5);
@@ -86,11 +87,11 @@ TEST_TEAR_DOWN(Services_HAL_Integration)
 TEST(Services_HAL_Integration, ServiceLifecycle_OpenRunClose)
 {
     /* Open HAL */
-    int r = mock_hal_open(&g_svc.hal, g_svc.entry.name);
+    int r = mock_hal_open(mock_hal_get_state());
     TEST_ASSERT_EQUAL_INT(HAL_SUCCESS, r);
 
     /* Register in SM */
-    g_svc.entry.status = SERVICE_STATUS_RUNNING;
+    g_svc.entry.status = SERVICE_RUNNING;
     sm_registry_add(&g_svc.entry);
 
     /* Run service loop for a short time */
@@ -100,11 +101,11 @@ TEST(Services_HAL_Integration, ServiceLifecycle_OpenRunClose)
     g_svc.running = 0;
     pthread_join(g_svc.thread, NULL);
 
-    TEST_ASSERT_TRUE(g_svc.hal.read_count > 0);
+    TEST_ASSERT_TRUE(g_svc.hal->read_calls > 0);
 
     /* Close HAL */
-    mock_hal_close(&g_svc.hal);
-    TEST_ASSERT_EQUAL_INT(1, g_svc.hal.close_count);
+    mock_hal_close(mock_hal_get_state());
+    TEST_ASSERT_EQUAL_INT(1, g_svc.hal->close_calls);
 
     /* Cleanup SM */
     sm_registry_remove(g_svc.entry.name);
@@ -115,8 +116,8 @@ TEST(Services_HAL_Integration, ServiceLifecycle_OpenRunClose)
 
 TEST(Services_HAL_Integration, HAL_ErrorMidRun_ServiceAutoStops)
 {
-    mock_hal_open(&g_svc.hal, g_svc.entry.name);
-    g_svc.entry.status = SERVICE_STATUS_RUNNING;
+    mock_hal_open(mock_hal_get_state());
+    g_svc.entry.status = SERVICE_RUNNING;
     sm_registry_add(&g_svc.entry);
 
     g_svc.running = 1;
@@ -124,14 +125,14 @@ TEST(Services_HAL_Integration, HAL_ErrorMidRun_ServiceAutoStops)
 
     /* Inject failure after a brief delay */
     tu_sleep_ms(30);
-    g_svc.hal.read_ret = -1;
+    g_svc.hal->read_ret = -1;
 
     pthread_join(g_svc.thread, NULL);
 
     /* Service should have updated SM status to STOPPED */
     service_entry_t out;
     sm_registry_find_copy(g_svc.entry.name, &out);
-    TEST_ASSERT_EQUAL_INT(SERVICE_STATUS_STOPPED, (int)out.status);
+    TEST_ASSERT_EQUAL_INT(SERVICE_STOPPED, (int)out.status);
 }
 
 /* ── Scenario 3: Two services on the same device ─────────────────── */
@@ -141,21 +142,21 @@ TEST(Services_HAL_Integration, TwoServices_IndependentHALInstances)
     fake_service_t svc2;
     fake_service_init(&svc2, "data_svc_2", "/tmp/data2.sock", 3002);
 
-    mock_hal_open(&g_svc.hal, g_svc.entry.name);
-    mock_hal_open(&svc2.hal,  svc2.entry.name);
+    mock_hal_open(mock_hal_get_state());
+    mock_hal_open(mock_hal_get_state());
 
-    g_svc.entry.status = SERVICE_STATUS_RUNNING;
-    svc2.entry.status  = SERVICE_STATUS_RUNNING;
+    g_svc.entry.status = SERVICE_RUNNING;
+    svc2.entry.status  = SERVICE_RUNNING;
     sm_registry_add(&g_svc.entry);
     sm_registry_add(&svc2.entry);
 
     TEST_ASSERT_EQUAL_INT(2, sm_registry_count());
 
-    mock_hal_close(&g_svc.hal);
+    mock_hal_close(mock_hal_get_state());
     sm_registry_remove(g_svc.entry.name);
     TEST_ASSERT_EQUAL_INT(1, sm_registry_count());
 
-    mock_hal_close(&svc2.hal);
+    mock_hal_close(mock_hal_get_state());
     sm_registry_remove(svc2.entry.name);
     TEST_ASSERT_EQUAL_INT(0, sm_registry_count());
 }

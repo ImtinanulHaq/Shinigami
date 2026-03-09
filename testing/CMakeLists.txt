@@ -113,12 +113,22 @@ target_compile_options(lib_ring_buffer PRIVATE
     -g -O0 -fprofile-arcs -ftest-coverage
     -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE)
 
+add_library(lib_core STATIC
+    ${WORKSPACE_ROOT}/dev/core/memory_pool.c
+    ${WORKSPACE_ROOT}/dev/core/io_uring_loop.c
+)
+target_include_directories(lib_core PUBLIC ${WORKSPACE_ROOT}/dev/core)
+target_compile_options(lib_core PRIVATE
+    -g -O0 -fprofile-arcs -ftest-coverage
+    -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
+    -Wno-error)
+
 add_library(lib_hal STATIC
-    ${WORKSPACE_ROOT}/dev/hal/hal_interface.c
-    ${WORKSPACE_ROOT}/dev/hal/audio_hal.c
-    ${WORKSPACE_ROOT}/dev/hal/camera_hal.c
-    ${WORKSPACE_ROOT}/dev/hal/gpio_hal.c
-    ${WORKSPACE_ROOT}/dev/hal/sensor_hal.c
+    ${WORKSPACE_ROOT}/dev/hal/interface/hal_interface.c
+    ${WORKSPACE_ROOT}/dev/hal/layers/audio/audio_hal.c
+    ${WORKSPACE_ROOT}/dev/hal/layers/camera/camera_hal.c
+    ${WORKSPACE_ROOT}/dev/hal/layers/gpio/gpio_hal.c
+    ${WORKSPACE_ROOT}/dev/hal/layers/sensors/sensor_hal.c
 )
 target_include_directories(lib_hal PUBLIC ${INC})
 target_compile_options(lib_hal PRIVATE
@@ -152,15 +162,13 @@ macro(add_test_exe NAME)
     )
     target_compile_options(${NAME} PRIVATE ${TEST_COMPILE_FLAGS})
     target_link_libraries(${NAME}
-        unity test_helpers test_mocks
-        lib_ring_buffer lib_sm lib_hal lib_security
-        pthread m
+        unity test_mocks
+        lib_ring_buffer lib_core lib_sm lib_hal lib_security
+        test_helpers pthread m uring
     )
     target_link_options(${NAME} PRIVATE
         -fprofile-arcs
         -fsanitize=address,undefined
-        -Wl,--wrap=malloc -Wl,--wrap=calloc
-        -Wl,--wrap=realloc -Wl,--wrap=free
     )
     add_test(NAME ${NAME} COMMAND ${NAME})
 endmacro()

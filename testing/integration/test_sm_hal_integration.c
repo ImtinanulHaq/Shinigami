@@ -19,17 +19,19 @@
 #include <string.h>
 #include <pthread.h>
 
-static mock_hal_state_t g_hal;
+/* g_halp is the same as g_state in mock_hal.c — use pointer to avoid divergence */
+static mock_hal_state_t *g_halp;
 
 TEST_GROUP(SM_HAL_Integration);
 
 TEST_SETUP(SM_HAL_Integration)
 {
     sm_registry_init();
-    mock_hal_reset(&g_hal);
-    g_hal.open_ret  = HAL_SUCCESS;
-    g_hal.close_ret = HAL_SUCCESS;
-    g_hal.read_ret  = HAL_SUCCESS;
+    g_halp = mock_hal_get_state();
+    mock_hal_reset(g_halp);
+    g_halp->open_ret  = HAL_SUCCESS;
+    g_halp->close_ret = HAL_SUCCESS;
+    g_halp->read_ret  = HAL_SUCCESS;
 }
 
 TEST_TEAR_DOWN(SM_HAL_Integration)
@@ -42,9 +44,9 @@ TEST_TEAR_DOWN(SM_HAL_Integration)
 TEST(SM_HAL_Integration, OpenHAL_ThenRegister_EntryPresent)
 {
     /* Simulate a service: open HAL device */
-    int r = mock_hal_open(&g_hal, "audio_service");
+    int r = mock_hal_open(g_halp);
     TEST_ASSERT_EQUAL_INT(HAL_SUCCESS, r);
-    TEST_ASSERT_EQUAL_INT(1, g_hal.open_count);
+    TEST_ASSERT_EQUAL_INT(1, g_halp->open_calls);
 
     /* Register the service in SM */
     service_entry_t e;
@@ -52,7 +54,7 @@ TEST(SM_HAL_Integration, OpenHAL_ThenRegister_EntryPresent)
     strncpy(e.name,        "audio_service", sizeof(e.name) - 1);
     strncpy(e.socket_path, "/tmp/audio.sock", sizeof(e.socket_path) - 1);
     e.pid    = 1001;
-    e.status = SERVICE_STATUS_RUNNING;
+    e.status = SERVICE_RUNNING;
     r = sm_registry_add(&e);
     TEST_ASSERT_EQUAL_INT(0, r);
 
@@ -60,25 +62,25 @@ TEST(SM_HAL_Integration, OpenHAL_ThenRegister_EntryPresent)
     service_entry_t out;
     r = sm_registry_find_copy("audio_service", &out);
     TEST_ASSERT_EQUAL_INT(0, r);
-    TEST_ASSERT_EQUAL_INT(SERVICE_STATUS_RUNNING, (int)out.status);
+    TEST_ASSERT_EQUAL_INT(SERVICE_RUNNING, (int)out.status);
 }
 
 /* ── Scenario 2: HAL close → SM deregistration ──────────────────────*/
 
 TEST(SM_HAL_Integration, CloseHAL_ThenDeregister_EntryGone)
 {
-    mock_hal_open(&g_hal, "sensor_service");
+    mock_hal_open(g_halp);
 
     service_entry_t e;
     memset(&e, 0, sizeof(e));
     strncpy(e.name,        "sensor_service", sizeof(e.name) - 1);
     strncpy(e.socket_path, "/tmp/sensor.sock", sizeof(e.socket_path) - 1);
     e.pid    = 1002;
-    e.status = SERVICE_STATUS_RUNNING;
+    e.status = SERVICE_RUNNING;
     sm_registry_add(&e);
 
     /* Service stops: close HAL then remove from SM */
-    int r = mock_hal_close(&g_hal);
+    int r = mock_hal_close(g_halp);
     TEST_ASSERT_EQUAL_INT(HAL_SUCCESS, r);
 
     r = sm_registry_remove("sensor_service");
@@ -90,28 +92,28 @@ TEST(SM_HAL_Integration, CloseHAL_ThenDeregister_EntryGone)
 
 TEST(SM_HAL_Integration, HAL_ReadError_UpdateSMStatus_Stopped)
 {
-    mock_hal_open(&g_hal, "camera_service");
+    mock_hal_open(g_halp);
 
     service_entry_t e;
     memset(&e, 0, sizeof(e));
     strncpy(e.name,        "camera_service",  sizeof(e.name) - 1);
     strncpy(e.socket_path, "/tmp/camera.sock", sizeof(e.socket_path) - 1);
     e.pid    = 1003;
-    e.status = SERVICE_STATUS_RUNNING;
+    e.status = SERVICE_RUNNING;
     sm_registry_add(&e);
 
     /* Simulate HAL read failure → service decides to stop */
-    g_hal.read_ret = -1;
+    g_halp->read_ret = -1;
     uint8_t buf[64];
-    int r = mock_hal_read(&g_hal, buf, sizeof(buf));
+    int r = mock_hal_read(g_halp, buf, sizeof(buf));
     TEST_ASSERT_NOT_EQUAL_INT(HAL_SUCCESS, r);
 
     /* Service marks itself stopped in SM */
-    sm_registry_update_status("camera_service", SERVICE_STATUS_STOPPED);
+    sm_registry_update_status("camera_service", SERVICE_STOPPED);
 
     service_entry_t out;
     sm_registry_find_copy("camera_service", &out);
-    TEST_ASSERT_EQUAL_INT(SERVICE_STATUS_STOPPED, (int)out.status);
+    TEST_ASSERT_EQUAL_INT(SERVICE_STOPPED, (int)out.status);
 }
 
 /* ── Scenario 4: Multi-service HAL + SM concurrent registration ──── */
@@ -130,14 +132,14 @@ static void *concurrent_hal_register(void *arg)
 
     mock_hal_reset(&a->hal);
     a->hal.open_ret = HAL_SUCCESS;
-    mock_hal_open(&a->hal, name);
+    mock_hal_open(&a->hal);
 
     service_entry_t e;
     memset(&e, 0, sizeof(e));
     strncpy(e.name, name, sizeof(e.name) - 1);
     snprintf(e.socket_path, sizeof(e.socket_path), "/tmp/hal%d.sock", a->id);
     e.pid    = (pid_t)(2000 + a->id);
-    e.status = SERVICE_STATUS_RUNNING;
+    e.status = SERVICE_RUNNING;
     sm_registry_add(&e);
 
     mock_hal_close(&a->hal);

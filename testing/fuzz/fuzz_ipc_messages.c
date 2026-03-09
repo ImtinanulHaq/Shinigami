@@ -26,14 +26,14 @@ static uint32_t xshift(void) { g_rng^=g_rng<<13; g_rng^=g_rng>>17; g_rng^=g_rng<
 static void fuzz_one(const uint8_t *data, size_t size)
 {
     /* --- Protocol validators ---------------------------------------- */
-    if (size >= sizeof(sm_message_header_t)) {
-        const sm_message_header_t *hdr = (const sm_message_header_t *)data;
+    if (size >= sizeof(sm_hdr_t)) {
+        const sm_hdr_t *hdr = (const sm_hdr_t *)data;
         sm_validate_header(hdr, size);
     }
 
     /* Treat data as a name string */
     {
-        char name[SM_MAX_SERVICE_NAME + 4];
+        char name[SM_MAX_NAME + 4];
         size_t n = size < sizeof(name) - 1 ? size : sizeof(name) - 1;
         memcpy(name, data, n); name[n] = '\0';
         sm_validate_service_name(name);
@@ -41,7 +41,7 @@ static void fuzz_one(const uint8_t *data, size_t size)
 
     /* Treat data as a socket path */
     {
-        char path[SM_MAX_SOCKET_PATH + 4];
+        char path[SM_MAX_PATH + 4];
         size_t n = size < sizeof(path) - 1 ? size : sizeof(path) - 1;
         memcpy(path, data, n); path[n] = '\0';
         sm_validate_socket_path(path);
@@ -50,7 +50,7 @@ static void fuzz_one(const uint8_t *data, size_t size)
     /* Treat first 4 bytes as a message size */
     if (size >= 4) {
         uint32_t sz; memcpy(&sz, data, sizeof(sz));
-        sm_validate_message_size(sz);
+        sm_validate_message_size(sz, SM_MSG_REGISTER);
     }
 
     /* --- Registry: attempt add with garbage entry ------------------- */

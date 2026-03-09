@@ -195,8 +195,10 @@ static void make_valid_hdr(sm_hdr_t *h, uint16_t type, uint32_t plen)
 TEST(SM_Protocol, ValidHeader_PassesBasicValidation)
 {
     sm_hdr_t hdr;
-    make_valid_hdr(&hdr, SM_MSG_HEARTBEAT, 0);
-    int r = sm_validate_header(&hdr, sizeof(hdr));
+    /* sm_validate_header requires length > 0 and received_size == sizeof(hdr) + length */
+    const uint32_t payload_len = 4;
+    make_valid_hdr(&hdr, SM_MSG_HEARTBEAT, payload_len);
+    int r = sm_validate_header(&hdr, sizeof(hdr) + payload_len);
     TEST_ASSERT_TRUE_MESSAGE(r == SM_OK || r >= 0,
         "Valid header should pass validation");
 }
