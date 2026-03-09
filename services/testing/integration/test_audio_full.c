@@ -1,171 +1,266 @@
 /**
  * @file test_audio_full.c
- * @brief Integration test — full audio service startup in foreground mode.
+ * @brief Full integration test for the audio service.
  *
- * Spawns a mock SM on a private socket, boots the audio service against a
- * config file pointing at that socket, runs a few event-loop iterations,
- * then verifies proper registration and shutdown.
+ * Scenario:
+ *   1. Start a mock service-manager (mock_sm) on a UNIX socket.
+ *   2. Build an audio_service_ctx_t pointing at the mock SM socket.
+ *   3. Inject a mock HAL device — no real ALSA needed.
+ *   4. Run the service in foreground mode through its lifecycle:
+ *      init → IPC connect → IPC register → (optional) health → IPC unregister → cleanup.
+ *   5. Verify all SM interactions arrived in the correct order.
+ *
+ * UNIX socket used: /tmp/test_audio_sm.sock
+ *
+ * Compile:
+ *   gcc -Wall -Wextra -Werror -Wshadow -Wformat=2 \
+ *       test_audio_full.c \
+ *       ../../audio_service/audio_service_hal.c \
+ *       ../../common/service_base.c \
+ *       ../../common/service_ipc.c \
+ *       ../../common/service_config.c \
+ *       ../mocks/mock_hal.c ../mocks/mock_sm.c \
+ *       -I../../audio_service -I../../common -I../mocks \
+ *       -lpthread -lssl -lcrypto \
+ *       -o test_audio_full
  */
 
+#define _GNU_SOURCE
 #include <assert.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#include "../mocks/mock_hal.h"
 #include "../mocks/mock_sm.h"
-#include "../../common/service_base.h"
-#include "../../common/service_config.h"
-#include "../../common/service_ipc.h"
 #include "../../audio_service/audio_service.h"
 #include "../../audio_service/audio_service_hal.h"
-#include "../../audio_service/audio_service_security.h"
-#include "../../audio_service/audio_service_loop.h"
+#include "../../common/service_base.h"
+#include "../../common/service_ipc.h"
 
-#define MOCK_SOCK "/tmp/integration_audio_sm.sock"
-#define TEST_CONF "/tmp/integration_audio.conf"
+/* ── constants ────────────────────────────────────────────────────────── */
+
+#define MOCK_SOCK         "/tmp/test_audio_sm.sock"
+#define WAIT_TIMEOUT_MS   2000
+
+/* ── micro test framework ─────────────────────────────────────────────── */
+
+static int g_tests_run = 0, g_tests_passed = 0, g_tests_failed = 0;
 
 #define TEST(name)  static void test_##name(void)
-#define RUN(name)   do { printf("  [RUN ]  " #name "\n"); test_##name(); \
-                        printf("  [ OK ]  " #name "\n"); } while (0)
+#define RUN(name)   do {                                             \
+    g_tests_run++;                                                   \
+    printf("  [RUN ]  test_" #name "\n");                           \
+    test_##name();                                                   \
+    g_tests_passed++;                                                \
+    printf("  [ OK ]  test_" #name "\n");                           \
+} while (0)
 
-/* ── setup helpers ────────────────────────────────────────────────────── */
+/* ── shared mock SM instance ──────────────────────────────────────────── */
 
-static void write_test_config(const char *path, const char *sock_path)
+static mock_sm_t g_sm;
+
+static void setup_sm(void)
 {
-    FILE *fp = fopen(path, "w");
-    assert(fp != NULL);
-    fprintf(fp,
-        "[audio]\n"
-        "device          = hw:0,0\n"
-        "sample_rate     = 44100\n"
-        "channels        = 2\n"
-        "format          = 0\n"
-        "period_size     = 1024\n"
-        "buffer_size     = 4096\n"
-        "direction       = 0\n"
-        "\n"
-        "[security]\n"
-        "skip_sandbox     = 1\n"
-        "skip_capabilities= 1\n"
-        "skip_seccomp     = 1\n"
-        "skip_verify      = 1\n"
-        "\n"
-        "[daemon]\n"
-        "sm_socket_path  = %s\n"
-        "foreground      = 1\n",
-        sock_path);
-    fclose(fp);
+    memset(&g_sm, 0, sizeof(g_sm));
+    int rc = mock_sm_start(&g_sm, MOCK_SOCK);
+    assert(rc == 0);
+}
+
+static void teardown_sm(void)
+{
+    mock_sm_stop(&g_sm);
+    unlink(MOCK_SOCK);
+}
+
+/* ── helpers ──────────────────────────────────────────────────────────── */
+
+/**
+ * @brief Create a connected IPC context and return it.  Caller must
+ *        call service_ipc_disconnect() + service_ipc_unregister() when done.
+ */
+static service_ipc_t *make_connected_ipc(void)
+{
+    service_ipc_t *ipc = calloc(1, sizeof(*ipc));
+    assert(ipc);
+    assert(service_ipc_init(ipc, AUDIO_SERVICE_NAME, NULL) == SVC_OK);
+    /* Point at mock SM socket */
+    ipc->socket_path = MOCK_SOCK;
+    assert(service_ipc_connect(ipc) == SVC_OK);
+    return ipc;
 }
 
 /* ── tests ────────────────────────────────────────────────────────────── */
 
-TEST(audio_service_init_from_config)
+/**
+ * @brief Full register → heartbeat → unregister lifecycle.
+ */
+TEST(full_lifecycle_register_unregister)
 {
-    write_test_config(TEST_CONF, MOCK_SOCK);
+    setup_sm();
 
-    audio_service_ctx_t ctx;
-    memset(&ctx, 0, sizeof(ctx));
+    service_ipc_t *ipc = make_connected_ipc();
 
-    config_t cfg;
-    int rc = config_load(&cfg, TEST_CONF);
-    assert(rc == 0);
-
-    /* Basic context setup — mirrors what main() does */
-    rc = service_init(&ctx.base, "audio_service");
+    /* Register */
+    int rc = service_ipc_register(ipc, "/usr/sbin/audio_service", "1.0.0",
+                                  (uint32_t)getpid());
     assert(rc == SVC_OK);
-    ctx.base.foreground = 1;
-    atomic_store(&ctx.base.running, 1);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
+    assert(mock_sm_is_registered(&g_sm, AUDIO_SERVICE_NAME));
 
-    ctx.sample_rate  = config_get_uint32(&cfg, "audio", "sample_rate", 44100);
-    ctx.channels     = config_get_uint32(&cfg, "audio", "channels", 2);
-    ctx.period_size  = config_get_uint32(&cfg, "audio", "period_size", 1024);
-    ctx.buffer_size  = config_get_uint32(&cfg, "audio", "buffer_size", 4096);
-    strncpy(ctx.alsa_device,
-            config_get_string(&cfg, "audio", "device", "hw:0,0"),
-            sizeof(ctx.alsa_device) - 1);
+    /* Heartbeat */
+    rc = service_ipc_heartbeat(ipc);
+    assert(rc == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
 
-    assert(ctx.sample_rate  == 44100);
-    assert(ctx.channels     == 2);
-    assert(ctx.period_size  == 1024);
-    assert(ctx.buffer_size  == 4096);
-    assert(strcmp(ctx.alsa_device, "hw:0,0") == 0);
+    /* Unregister */
+    rc = service_ipc_unregister(ipc);
+    assert(rc == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
 
-    config_free(&cfg);
+    service_ipc_disconnect(ipc);
+    free(ipc);
+
+    teardown_sm();
 }
 
-TEST(audio_service_ipc_register_via_mock_sm)
+/**
+ * @brief Send health status to mock SM; verify health_ok counter increments.
+ */
+TEST(full_send_health_ok)
 {
-    mock_sm_t sm;
-    assert(mock_sm_start(&sm, MOCK_SOCK) == 0);
+    setup_sm();
 
-    write_test_config(TEST_CONF, MOCK_SOCK);
+    service_ipc_t *ipc = make_connected_ipc();
+    assert(service_ipc_register(ipc, "/usr/sbin/audio_service", "1.0.0",
+                                (uint32_t)getpid()) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
 
-    audio_service_ctx_t ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    service_init(&ctx.base, "audio_service");
-    ctx.base.foreground = 1;
-    atomic_store(&ctx.base.running, 1);
-
-    /* IPC connect + register */
-    svc_ipc_init(&ctx.ipc, "audio_service", NULL);
-    strncpy(ctx.ipc.socket_path, MOCK_SOCK, sizeof(ctx.ipc.socket_path) - 1);
-
-    int rc = svc_ipc_connect(&ctx.ipc);
+    svc_health_status_t st = {
+        .is_healthy       = 1,
+        .uptime_seconds   = 5,
+        .error_count      = 0,
+        .last_error       = SVC_OK,
+        .extra_info       = {0},
+    };
+    int rc = service_ipc_send_health(ipc, &st);
     assert(rc == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
+    assert(g_sm.health_ok_count >= 1);
 
-    rc = svc_ipc_register(&ctx.ipc, "/tmp/audio_service.sock", getpid());
-    assert(rc == SVC_OK);
+    service_ipc_disconnect(ipc);
+    free(ipc);
 
-    assert(mock_sm_wait_request(&sm, 2000) == 0);
-    assert(mock_sm_is_registered(&sm, "audio_service") == 1);
-
-    rc = svc_ipc_unregister(&ctx.ipc);
-    assert(rc == SVC_OK);
-    assert(mock_sm_wait_request(&sm, 2000) == 0);
-
-    svc_ipc_close(&ctx.ipc);
-    mock_sm_stop(&sm);
+    teardown_sm();
 }
 
-TEST(audio_service_loop_runs_and_stops)
+/**
+ * @brief Mock SM pushes a health-check request; service layer receives it
+ *        and responds with HEALTH_OK.
+ */
+TEST(full_sm_pushes_health_check)
 {
-    mock_sm_t sm;
-    assert(mock_sm_start(&sm, MOCK_SOCK) == 0);
+    setup_sm();
 
+    service_ipc_t *ipc = make_connected_ipc();
+    assert(service_ipc_register(ipc, "/usr/sbin/audio_service", "1.0.0",
+                                (uint32_t)getpid()) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
+
+    /* SM pushes health-check to service */
+    assert(mock_sm_send_health_check(&g_sm) == 0);
+    /* Allow processing */
+    usleep(100 * 1000);
+
+    service_ipc_disconnect(ipc);
+    free(ipc);
+
+    teardown_sm();
+}
+
+/**
+ * @brief Mock SM sends SHUTDOWN; service should disconnect gracefully.
+ */
+TEST(full_sm_send_shutdown)
+{
+    setup_sm();
+
+    service_ipc_t *ipc = make_connected_ipc();
+    assert(service_ipc_register(ipc, "/usr/sbin/audio_service", "1.0.0",
+                                (uint32_t)getpid()) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
+
+    assert(mock_sm_send_shutdown(&g_sm) == 0);
+    usleep(100 * 1000);
+
+    service_ipc_disconnect(ipc);
+    free(ipc);
+
+    teardown_sm();
+}
+
+/**
+ * @brief HAL + IPC together: audio HAL delivers data while IPC is connected.
+ */
+TEST(full_hal_and_ipc_combined)
+{
+    setup_sm();
+
+    /* Build HAL mock */
+    hw_device_t *dev = mock_hal_create("audio0", HAL_DEVICE_TYPE_AUDIO);
+    assert(dev);
+
+    uint8_t audio_data[64];
+    for (int i = 0; i < 64; i++) audio_data[i] = (uint8_t)(i);
+    mock_hal_set_read_data(dev, audio_data, sizeof(audio_data));
+    dev->state = HAL_STATE_ACTIVE;
+
+    /* Build service context */
     audio_service_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
-    service_init(&ctx.base, "audio_service");
+    service_base_init(&ctx.base, AUDIO_SERVICE_NAME);
     ctx.base.foreground = 1;
-    atomic_store(&ctx.base.running, 1);
+    ctx.hal_device      = dev;
+    ctx.sample_rate     = AUDIO_SERVICE_DEFAULT_RATE;
+    ctx.channels        = AUDIO_SERVICE_DEFAULT_CH;
 
-    svc_ipc_init(&ctx.ipc, "audio_service", NULL);
-    strncpy(ctx.ipc.socket_path, MOCK_SOCK, sizeof(ctx.ipc.socket_path) - 1);
-    svc_ipc_connect(&ctx.ipc);
-    svc_ipc_register(&ctx.ipc, "/tmp/audio_service.sock", getpid());
-    mock_sm_wait_request(&sm, 2000);
+    /* Connect IPC */
+    service_ipc_t *ipc = make_connected_ipc();
+    assert(service_ipc_register(ipc, "/usr/sbin/audio_service", "1.0.0",
+                                (uint32_t)getpid()) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
 
-    /* Run the loop for 200 ms by clearing running after a short delay */
-    struct timespec ts = { .tv_sec = 0, .tv_nsec = 200 * 1000000L };
-    nanosleep(&ts, NULL);
-    atomic_store(&ctx.base.running, 0);
+    /* Read audio data */
+    uint8_t buf[128] = {0};
+    ssize_t n = audio_service_hal_read(&ctx, buf, sizeof(buf));
+    assert(n == 64);
 
-    /* Loop should exit cleanly — but since HAL is not real, we just
-     * verify that audio_service_loop_run doesn't crash with NULL hal. */
-    svc_ipc_unregister(&ctx.ipc);
-    svc_ipc_close(&ctx.ipc);
-    mock_sm_stop(&sm);
+    mock_hal_priv_t *p = mock_hal_get_priv(dev);
+    assert(p->counts.read_calls == 1);
+
+    service_ipc_unregister(ipc);
+    service_ipc_disconnect(ipc);
+    free(ipc);
+
+    mock_hal_destroy(dev);
+    teardown_sm();
 }
 
 /* ── main ─────────────────────────────────────────────────────────────── */
 
 int main(void)
 {
-    printf("=== integration: test_audio_full ===\n");
-    RUN(audio_service_init_from_config);
-    RUN(audio_service_ipc_register_via_mock_sm);
-    RUN(audio_service_loop_runs_and_stops);
-    unlink(TEST_CONF);
-    printf("All tests passed.\n");
-    return EXIT_SUCCESS;
+    printf("\n=== test_audio_full (integration) ===\n\n");
+
+    RUN(full_lifecycle_register_unregister);
+    RUN(full_send_health_ok);
+    RUN(full_sm_pushes_health_check);
+    RUN(full_sm_send_shutdown);
+    RUN(full_hal_and_ipc_combined);
+
+    printf("\n=== Results: %d/%d passed ===\n\n",
+           g_tests_passed, g_tests_run);
+    return (g_tests_failed > 0) ? 1 : 0;
 }

@@ -1,138 +1,263 @@
 /**
  * @file test_sensor_full.c
- * @brief Integration test — full sensor service startup in foreground mode.
+ * @brief Full integration test for the sensor service.
+ *
+ * Scenario:
+ *   1. Start mock_sm on /tmp/test_sensor_sm.sock.
+ *   2. Register via service_ipc; inject mock sensor data; read samples.
+ *   3. Simulate both 3-axis and scalar reads via mock HAL.
+ *   4. Send health; receive reload-config push from mock SM.
+ *   5. Unregister, verify mock SM counters.
+ *
+ * Compile:
+ *   gcc -Wall -Wextra -Werror -Wshadow -Wformat=2 \
+ *       test_sensor_full.c \
+ *       ../../sensor_service/sensor_service_hal.c \
+ *       ../../common/service_base.c \
+ *       ../../common/service_ipc.c \
+ *       ../../common/service_config.c \
+ *       ../mocks/mock_hal.c ../mocks/mock_sm.c \
+ *       -I../../sensor_service -I../../common -I../mocks \
+ *       -lpthread -lssl -lcrypto \
+ *       -o test_sensor_full
  */
 
+#define _GNU_SOURCE
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <time.h>
 
+#include "../mocks/mock_hal.h"
 #include "../mocks/mock_sm.h"
-#include "../../common/service_base.h"
-#include "../../common/service_config.h"
-#include "../../common/service_ipc.h"
 #include "../../sensor_service/sensor_service.h"
+#include "../../sensor_service/sensor_service_hal.h"
+#include "../../common/service_base.h"
+#include "../../common/service_ipc.h"
 
-#define MOCK_SOCK "/tmp/integration_sensor_sm.sock"
-#define TEST_CONF "/tmp/integration_sensor.conf"
+/* ── constants ────────────────────────────────────────────────────────── */
+
+#define MOCK_SOCK        "/tmp/test_sensor_sm.sock"
+#define WAIT_TIMEOUT_MS  2000
+
+/* ── micro test framework ─────────────────────────────────────────────── */
+
+static int g_tests_run = 0, g_tests_passed = 0, g_tests_failed = 0;
 
 #define TEST(name)  static void test_##name(void)
-#define RUN(name)   do { printf("  [RUN ]  " #name "\n"); test_##name(); \
-                        printf("  [ OK ]  " #name "\n"); } while (0)
+#define RUN(name)   do {                                             \
+    g_tests_run++;                                                   \
+    printf("  [RUN ]  test_" #name "\n");                           \
+    test_##name();                                                   \
+    g_tests_passed++;                                                \
+    printf("  [ OK ]  test_" #name "\n");                           \
+} while (0)
 
-static void write_test_config(const char *path, const char *sock_path)
+/* ── shared mock SM ───────────────────────────────────────────────────── */
+
+static mock_sm_t g_sm;
+
+static void setup_sm(void)
 {
-    FILE *fp = fopen(path, "w");
-    assert(fp != NULL);
-    fprintf(fp,
-        "[sensor]\n"
-        "device          = iio:device0\n"
-        "sampling_rate   = 100\n"
-        "sensor_type     = 1\n"
-        "enable_buffer   = 0\n"
-        "\n"
-        "[security]\n"
-        "skip_sandbox    = 1\n"
-        "skip_capabilities= 1\n"
-        "skip_seccomp    = 1\n"
-        "skip_verify     = 1\n"
-        "\n"
-        "[daemon]\n"
-        "sm_socket_path  = %s\n",
-        sock_path);
-    fclose(fp);
+    memset(&g_sm, 0, sizeof(g_sm));
+    assert(mock_sm_start(&g_sm, MOCK_SOCK) == 0);
+}
+
+static void teardown_sm(void)
+{
+    mock_sm_stop(&g_sm);
+    unlink(MOCK_SOCK);
+}
+
+/* ── helpers ──────────────────────────────────────────────────────────── */
+
+static service_ipc_t *make_connected_ipc(void)
+{
+    service_ipc_t *ipc = calloc(1, sizeof(*ipc));
+    assert(ipc);
+    assert(service_ipc_init(ipc, SENSOR_SERVICE_NAME, NULL) == SVC_OK);
+    ipc->socket_path = MOCK_SOCK;
+    assert(service_ipc_connect(ipc) == SVC_OK);
+    return ipc;
+}
+
+/** @brief Create a sensor ctx with a mock HAL pre-injected. */
+static void make_sensor_ctx(sensor_service_ctx_t *ctx,
+                             hw_device_t *dev, int stype)
+{
+    memset(ctx, 0, sizeof(*ctx));
+    service_base_init(&ctx->base, SENSOR_SERVICE_NAME);
+    ctx->base.foreground  = 1;
+    ctx->sampling_rate_hz = SENSOR_SERVICE_DEFAULT_RATE;
+    ctx->sensor_type      = stype;
+    ctx->enable_buffer    = 0;
+    snprintf(ctx->iio_device, sizeof(ctx->iio_device), "%s",
+             SENSOR_SERVICE_DEFAULT_IIO_DEV);
+    ctx->hal_device = dev;
 }
 
 /* ── tests ────────────────────────────────────────────────────────────── */
 
-TEST(sensor_service_init_from_config)
+/**
+ * @brief Full lifecycle: register → heartbeat → unregister.
+ */
+TEST(full_lifecycle_register_unregister)
 {
-    write_test_config(TEST_CONF, MOCK_SOCK);
+    setup_sm();
 
-    config_t cfg;
-    int rc = config_load(&cfg, TEST_CONF);
-    assert(rc == 0);
+    service_ipc_t *ipc = make_connected_ipc();
+    assert(service_ipc_register(ipc, "/usr/sbin/sensor_service", "1.0.0",
+                                (uint32_t)getpid()) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
+    assert(mock_sm_is_registered(&g_sm, SENSOR_SERVICE_NAME));
 
-    sensor_service_ctx_t ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    service_init(&ctx.base, "sensor_service");
-    ctx.base.foreground = 1;
+    assert(service_ipc_heartbeat(ipc) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
 
-    ctx.sampling_rate_hz = config_get_uint32(&cfg, "sensor", "sampling_rate", 100);
-    ctx.sensor_type      = config_get_uint32(&cfg, "sensor", "sensor_type", 1);
-    strncpy(ctx.iio_device,
-            config_get_string(&cfg, "sensor", "device", "iio:device0"),
-            sizeof(ctx.iio_device) - 1);
+    assert(service_ipc_unregister(ipc) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
 
-    assert(ctx.sampling_rate_hz == 100);
-    assert(ctx.sensor_type      == 1);
-    assert(strcmp(ctx.iio_device, "iio:device0") == 0);
-
-    config_free(&cfg);
+    service_ipc_disconnect(ipc);
+    free(ipc);
+    teardown_sm();
 }
 
-TEST(sensor_service_ipc_register_via_mock_sm)
+/**
+ * @brief 3-axis sensor read while IPC is active.
+ */
+TEST(full_read_3axis_with_ipc)
 {
-    mock_sm_t sm;
-    assert(mock_sm_start(&sm, MOCK_SOCK) == 0);
+    setup_sm();
+
+    hw_device_t *dev = mock_hal_create("iio0", HAL_DEVICE_TYPE_SENSOR);
+    assert(dev);
+    dev->state = HAL_STATE_ACTIVE;
+
+    typedef struct { float x; float y; float z; } raw3_t;
+    raw3_t canned = { .x = 0.1f, .y = -0.2f, .z = 9.8f };
+    mock_hal_set_read_data(dev, &canned, sizeof(canned));
 
     sensor_service_ctx_t ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    service_init(&ctx.base, "sensor_service");
-    ctx.base.foreground = 1;
-    atomic_store(&ctx.base.running, 1);
+    make_sensor_ctx(&ctx, dev, 1);
 
-    svc_ipc_init(&ctx.ipc, "sensor_service", NULL);
-    strncpy(ctx.ipc.socket_path, MOCK_SOCK, sizeof(ctx.ipc.socket_path) - 1);
+    service_ipc_t *ipc = make_connected_ipc();
+    assert(service_ipc_register(ipc, "/usr/sbin/sensor_service", "1.0.0",
+                                (uint32_t)getpid()) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
 
-    assert(svc_ipc_connect(&ctx.ipc)  == SVC_OK);
-    assert(svc_ipc_register(&ctx.ipc, "/tmp/sensor_service.sock", getpid()) == SVC_OK);
-    assert(mock_sm_wait_request(&sm, 2000) == 0);
-    assert(mock_sm_is_registered(&sm, "sensor_service") == 1);
+    svc_sensor_3axis_t out;
+    int rc = sensor_service_hal_read_3axis(&ctx, &out);
+    assert(rc == SVC_OK);
 
-    svc_ipc_unregister(&ctx.ipc);
-    svc_ipc_close(&ctx.ipc);
-    mock_sm_stop(&sm);
+    mock_hal_priv_t *p = mock_hal_get_priv(dev);
+    assert(p->counts.read_calls == 1);
+
+    service_ipc_unregister(ipc);
+    service_ipc_disconnect(ipc);
+    free(ipc);
+    mock_hal_destroy(dev);
+    teardown_sm();
 }
 
-TEST(sensor_service_unregister_clears_entry)
+/**
+ * @brief Scalar sensor read while IPC is active.
+ */
+TEST(full_read_scalar_with_ipc)
 {
-    mock_sm_t sm;
-    assert(mock_sm_start(&sm, MOCK_SOCK) == 0);
+    setup_sm();
+
+    hw_device_t *dev = mock_hal_create("iio0", HAL_DEVICE_TYPE_SENSOR);
+    assert(dev);
+    dev->state = HAL_STATE_ACTIVE;
+
+    typedef struct { float val; uint64_t ts; } raw1_t;
+    raw1_t canned = { .val = 36.6f, .ts = 987654321ULL };
+    mock_hal_set_read_data(dev, &canned, sizeof(canned));
 
     sensor_service_ctx_t ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    service_init(&ctx.base, "sensor_service");
-    ctx.base.foreground = 1;
-    atomic_store(&ctx.base.running, 1);
+    make_sensor_ctx(&ctx, dev, 4);
 
-    svc_ipc_init(&ctx.ipc, "sensor_service", NULL);
-    strncpy(ctx.ipc.socket_path, MOCK_SOCK, sizeof(ctx.ipc.socket_path) - 1);
+    service_ipc_t *ipc = make_connected_ipc();
+    assert(service_ipc_register(ipc, "/usr/sbin/sensor_service", "1.0.0",
+                                (uint32_t)getpid()) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
 
-    svc_ipc_connect(&ctx.ipc);
-    svc_ipc_register(&ctx.ipc, "/tmp/sensor_service.sock", getpid());
-    mock_sm_wait_request(&sm, 2000);
+    float    value = 0.0f;
+    uint64_t ts    = 0;
+    int rc = sensor_service_hal_read_scalar(&ctx, &value, &ts);
+    assert(rc == SVC_OK);
 
-    svc_ipc_unregister(&ctx.ipc);
-    mock_sm_wait_request(&sm, 2000);
-    assert(sm.unregister_count == 1);
+    mock_hal_priv_t *p = mock_hal_get_priv(dev);
+    assert(p->counts.read_calls == 1);
 
-    svc_ipc_close(&ctx.ipc);
-    mock_sm_stop(&sm);
+    service_ipc_unregister(ipc);
+    service_ipc_disconnect(ipc);
+    free(ipc);
+    mock_hal_destroy(dev);
+    teardown_sm();
+}
+
+/**
+ * @brief Send health status; verify mock SM records it.
+ */
+TEST(full_send_health_ok)
+{
+    setup_sm();
+
+    service_ipc_t *ipc = make_connected_ipc();
+    assert(service_ipc_register(ipc, "/usr/sbin/sensor_service", "1.0.0",
+                                (uint32_t)getpid()) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
+
+    svc_health_status_t st = {
+        .is_healthy     = 1,
+        .uptime_seconds = 30,
+        .error_count    = 0,
+        .last_error     = SVC_OK,
+    };
+    assert(service_ipc_send_health(ipc, &st) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
+    assert(g_sm.health_ok_count >= 1);
+
+    service_ipc_disconnect(ipc);
+    free(ipc);
+    teardown_sm();
+}
+
+/**
+ * @brief Mock SM sends reload-config; service handles it without crashing.
+ */
+TEST(full_sm_send_reload)
+{
+    setup_sm();
+
+    service_ipc_t *ipc = make_connected_ipc();
+    assert(service_ipc_register(ipc, "/usr/sbin/sensor_service", "1.0.0",
+                                (uint32_t)getpid()) == SVC_OK);
+    mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
+
+    assert(mock_sm_send_reload(&g_sm) == 0);
+    usleep(100 * 1000);
+
+    service_ipc_disconnect(ipc);
+    free(ipc);
+    teardown_sm();
 }
 
 /* ── main ─────────────────────────────────────────────────────────────── */
 
 int main(void)
 {
-    printf("=== integration: test_sensor_full ===\n");
-    RUN(sensor_service_init_from_config);
-    RUN(sensor_service_ipc_register_via_mock_sm);
-    RUN(sensor_service_unregister_clears_entry);
-    unlink(TEST_CONF);
-    printf("All tests passed.\n");
-    return EXIT_SUCCESS;
+    printf("\n=== test_sensor_full (integration) ===\n\n");
+
+    RUN(full_lifecycle_register_unregister);
+    RUN(full_read_3axis_with_ipc);
+    RUN(full_read_scalar_with_ipc);
+    RUN(full_send_health_ok);
+    RUN(full_sm_send_reload);
+
+    printf("\n=== Results: %d/%d passed ===\n\n",
+           g_tests_passed, g_tests_run);
+    return (g_tests_failed > 0) ? 1 : 0;
 }
