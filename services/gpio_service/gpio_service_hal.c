@@ -82,9 +82,15 @@ int gpio_service_hal_wait_interrupt(gpio_service_ctx_t *ctx,
                                     uint32_t timeout_ms)
 {
     if (!ctx || !ctx->hal_device) return SVC_ERR_INVALID;
-    int rc = gpio_hal_wait_interrupt((hw_device_t *)ctx->hal_device,
-                                     timeout_ms);
-    return (rc == HAL_SUCCESS) ? SVC_OK : SVC_ERR_HAL;
+    hw_device_t *dev = (hw_device_t *)ctx->hal_device;
+    if (!dev->ops || !dev->ops->control) return SVC_ERR_HAL;
+
+    /* Use the vtable control() call so mock devices work without real GPIO */
+    int rc = dev->ops->control(dev, 0 /* GPIO_CMD_WAIT_INTERRUPT */,
+                               &timeout_ms);
+    if (rc == HAL_SUCCESS)   return SVC_OK;
+    if (rc == HAL_ERROR_TIMEOUT) return SVC_ERR_TIMEOUT;
+    return SVC_ERR_HAL;
 }
 
 int gpio_service_hal_stop(gpio_service_ctx_t *ctx)
@@ -108,6 +114,9 @@ void gpio_service_hal_cleanup(gpio_service_ctx_t *ctx)
 {
     if (!ctx || !ctx->hal_device) return;
     hw_device_t *dev = (hw_device_t *)ctx->hal_device;
+
+    if (dev->ops && dev->ops->stop)
+        dev->ops->stop(dev);
 
     if (dev->ops && dev->ops->close)
         dev->ops->close(dev);

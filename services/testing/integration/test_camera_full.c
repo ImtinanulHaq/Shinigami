@@ -72,12 +72,12 @@ static void teardown_sm(void)
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
 
-static service_ipc_t *make_connected_ipc(void)
+static svc_ipc_t *make_connected_ipc(void)
 {
-    service_ipc_t *ipc = calloc(1, sizeof(*ipc));
+    svc_ipc_t *ipc = calloc(1, sizeof(*ipc));
     assert(ipc);
     assert(service_ipc_init(ipc, CAMERA_SERVICE_NAME, NULL) == SVC_OK);
-    ipc->socket_path = MOCK_SOCK;
+    strncpy(ipc->socket_path, MOCK_SOCK, sizeof(ipc->socket_path) - 1);
     assert(service_ipc_connect(ipc) == SVC_OK);
     return ipc;
 }
@@ -91,7 +91,7 @@ TEST(full_lifecycle_register_unregister)
 {
     setup_sm();
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/camera_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
@@ -133,7 +133,7 @@ TEST(full_hal_capture_frame)
     ctx.height          = CAMERA_SERVICE_DEFAULT_HEIGHT;
     ctx.fps             = CAMERA_SERVICE_DEFAULT_FPS;
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/camera_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
@@ -167,7 +167,7 @@ TEST(full_sm_send_reload)
 {
     setup_sm();
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/camera_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
@@ -187,16 +187,14 @@ TEST(full_send_health_ok)
 {
     setup_sm();
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/camera_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
 
     svc_health_status_t st = {
-        .is_healthy     = 1,
-        .uptime_seconds = 10,
+        .uptime_sec = 10,
         .error_count    = 0,
-        .last_error     = SVC_OK,
     };
     assert(service_ipc_send_health(ipc, &st) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
@@ -214,7 +212,7 @@ TEST(full_ping_roundtrip)
 {
     setup_sm();
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/camera_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);

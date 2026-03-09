@@ -9,6 +9,7 @@
 #include "../common/service_base.h"
 #include "../common/service_config.h"
 #include "../common/service_ipc.h"
+#include "hal_interface.h"
 
 #include <stdint.h>
 
@@ -23,18 +24,19 @@
 /* ── context ──────────────────────────────────────────────────────────── */
 
 typedef struct {
-    svc_context_t   base;
-    svc_ipc_t       ipc;
-    config_t        config;
-    void           *hal_device;    /**< hw_device_t* from gpio HAL          */
-    int             security_applied;
+    svc_context_t       base;
+    svc_ipc_t           ipc;
+    service_config_t    config;
+    void               *hal_device;    /**< hw_device_t* from gpio HAL      */
+    int                 security_applied;
+    char                chip[64];      /**< GPIO chip name (e.g. gpiochip0) */
 
     /* GPIO-specific config */
-    uint32_t        pin_number;
-    int             direction;     /**< gpio_direction_t enum value         */
-    int             initial_value; /**< gpio_value_t enum value             */
-    int             edge;          /**< gpio_edge_t enum value              */
-    int             interrupt_timeout_ms;
+    uint32_t            pin_number;
+    int                 direction;     /**< gpio_direction_t enum value     */
+    int                 initial_value; /**< gpio_value_t enum value         */
+    int                 edge;          /**< gpio_edge_t enum value          */
+    int                 interrupt_timeout_ms; /**< cast-compatible with uint32_t */
 } gpio_service_ctx_t;
 
 /* ── lifecycle API ────────────────────────────────────────────────────── */

@@ -9,6 +9,7 @@
 #include "../common/service_base.h"
 #include "../common/service_config.h"
 #include "../common/service_ipc.h"
+#include "hal_interface.h"
 
 #include <stdint.h>
 
@@ -27,8 +28,8 @@
 
 typedef struct {
     svc_context_t   base;
-    svc_ipc_t       ipc;
-    config_t        config;
+    svc_ipc_t           ipc;
+    service_config_t    config;
     void           *hal_device;    /**< hw_device_t* from camera HAL        */
     int             security_applied;
 

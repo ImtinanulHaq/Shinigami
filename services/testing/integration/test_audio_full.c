@@ -81,13 +81,13 @@ static void teardown_sm(void)
  * @brief Create a connected IPC context and return it.  Caller must
  *        call service_ipc_disconnect() + service_ipc_unregister() when done.
  */
-static service_ipc_t *make_connected_ipc(void)
+static svc_ipc_t *make_connected_ipc(void)
 {
-    service_ipc_t *ipc = calloc(1, sizeof(*ipc));
+    svc_ipc_t *ipc = calloc(1, sizeof(*ipc));
     assert(ipc);
     assert(service_ipc_init(ipc, AUDIO_SERVICE_NAME, NULL) == SVC_OK);
     /* Point at mock SM socket */
-    ipc->socket_path = MOCK_SOCK;
+    strncpy(ipc->socket_path, MOCK_SOCK, sizeof(ipc->socket_path) - 1);
     assert(service_ipc_connect(ipc) == SVC_OK);
     return ipc;
 }
@@ -101,7 +101,7 @@ TEST(full_lifecycle_register_unregister)
 {
     setup_sm();
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
 
     /* Register */
     int rc = service_ipc_register(ipc, "/usr/sbin/audio_service", "1.0.0",
@@ -133,17 +133,14 @@ TEST(full_send_health_ok)
 {
     setup_sm();
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/audio_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
 
     svc_health_status_t st = {
-        .is_healthy       = 1,
-        .uptime_seconds   = 5,
+        .uptime_sec   = 5,
         .error_count      = 0,
-        .last_error       = SVC_OK,
-        .extra_info       = {0},
     };
     int rc = service_ipc_send_health(ipc, &st);
     assert(rc == SVC_OK);
@@ -164,7 +161,7 @@ TEST(full_sm_pushes_health_check)
 {
     setup_sm();
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/audio_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
@@ -187,7 +184,7 @@ TEST(full_sm_send_shutdown)
 {
     setup_sm();
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/audio_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
@@ -227,7 +224,7 @@ TEST(full_hal_and_ipc_combined)
     ctx.channels        = AUDIO_SERVICE_DEFAULT_CH;
 
     /* Connect IPC */
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/audio_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);

@@ -192,7 +192,7 @@ TEST(hal_init_open_error)
     assert(dev);
 
     mock_hal_priv_t *p = mock_hal_get_priv(dev);
-    p->open_retval = HAL_ERROR_DEVICE;
+    p->open_retval = HAL_ERROR_NO_DEVICE;
 
     audio_service_ctx_t ctx;
     make_ctx(&ctx, dev);
@@ -200,7 +200,7 @@ TEST(hal_init_open_error)
 
     /* Simulate what hal_init does: call open, check return */
     int rc = dev->ops->open(dev);
-    assert(rc == HAL_ERROR_DEVICE);
+    assert(rc == HAL_ERROR_NO_DEVICE);
     assert(p->counts.open_calls == 1);
 
     mock_hal_destroy(dev);

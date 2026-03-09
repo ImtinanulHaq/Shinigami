@@ -13,6 +13,7 @@
 #include "../common/service_base.h"
 #include "../common/service_config.h"
 #include "../common/service_ipc.h"
+#include "hal_interface.h"
 
 #include <stdint.h>
 
@@ -39,7 +40,7 @@
 typedef struct {
     svc_context_t   base;          /**< Daemon lifecycle context           */
     svc_ipc_t       ipc;           /**< Service Manager IPC handle         */
-    config_t        config;        /**< Parsed INI configuration           */
+    service_config_t config;        /**< Parsed INI configuration           */
     void           *hal_device;    /**< hw_device_t* from audio HAL        */
     int             security_applied; /**< Non-zero if security locked down */
 

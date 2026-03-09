@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
@@ -143,8 +144,15 @@ static void dispatch(mock_sm_t *sm, int client_fd,
     pthread_cond_broadcast(&sm->cond);
     UNLOCK(sm);
 
-    /* Send reply.  Use send() with MSG_NOSIGNAL so a closed peer doesn't kill us. */
-    send(client_fd, &reply, sizeof(reply), MSG_NOSIGNAL);
+    /* Send reply: sm_hdr_t + sm_reply_t so recv_reply() can parse it. */
+    sm_hdr_t reply_hdr;
+    build_hdr(&reply_hdr, 0x00FF /* SM_MSG_REPLY */, (uint32_t)sizeof(reply));
+    struct iovec iov[2] = {
+        { .iov_base = &reply_hdr, .iov_len = sizeof(reply_hdr) },
+        { .iov_base = &reply,     .iov_len = sizeof(reply)     },
+    };
+    struct msghdr msg = { .msg_iov = iov, .msg_iovlen = 2 };
+    sendmsg(client_fd, &msg, MSG_NOSIGNAL);
 }
 
 /* ── worker thread ────────────────────────────────────────────────────── */
@@ -307,14 +315,19 @@ int mock_sm_wait_request(mock_sm_t *sm, int timeout_ms)
     }
 
     LOCK(sm);
-    int initial_count = sm->msg_log_count + sm->register_count +
-                        sm->heartbeat_count + sm->health_ok_count +
-                        sm->unregister_count;
+    /* Use the baseline from the last wait_request (or reset) as the snapshot.
+     * This lets each consecutive call wait for the NEXT new message. */
+    int snapshot = sm->last_wait_total;
 
     int rc = 0;
     while (rc == 0) {
-        int new_count = sm->msg_log_count;
-        if (new_count > initial_count) break;
+        int new_count = sm->msg_log_count  + sm->register_count +
+                        sm->heartbeat_count + sm->health_ok_count +
+                        sm->unregister_count;
+        if (new_count > snapshot) {
+            sm->last_wait_total = new_count; /* advance baseline */
+            break;
+        }
         rc = pthread_cond_timedwait(&sm->cond, &sm->lock, &deadline);
     }
     UNLOCK(sm);
@@ -366,6 +379,7 @@ void mock_sm_reset(mock_sm_t *sm)
     sm->ping_count       = 0;
     sm->msg_log_head     = 0;
     sm->msg_log_count    = 0;
+    sm->last_wait_total  = 0;
     memset(sm->entries,  0, sizeof(sm->entries));
     memset(sm->msg_log,  0, sizeof(sm->msg_log));
     UNLOCK(sm);

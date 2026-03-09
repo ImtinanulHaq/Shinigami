@@ -184,7 +184,7 @@ TEST(hal_start_error_propagated)
     assert(dev);
 
     mock_hal_priv_t *p = mock_hal_get_priv(dev);
-    p->start_retval = HAL_ERROR_NOT_SUPPORTED;
+    p->start_retval = HAL_ERROR_NOT_SUPPORT;
     dev->state = HAL_STATE_OPEN;
 
     sensor_service_ctx_t ctx;

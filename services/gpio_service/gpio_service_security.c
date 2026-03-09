@@ -24,21 +24,21 @@ int gpio_service_apply_security(gpio_service_ctx_t *ctx)
      */
     security_full_config_t sec_cfg = security_manager_default_config("gpio");
 
-    const char *key_path = config_get_string(&ctx->config, "security",
+    const char *key_path = service_config_get_string(&ctx->config, "security",
                                              "verify_key_file", NULL);
     if (key_path) {
         sec_cfg.verify_key_file = key_path;
         sec_cfg.skip_verify     = 0;
     }
 
-    sec_cfg.skip_sandbox = config_get_bool(&ctx->config, "security",
+    sec_cfg.skip_sandbox = service_config_get_bool(&ctx->config, "security",
                                            "skip_sandbox", sec_cfg.skip_sandbox);
-    sec_cfg.skip_capabilities = config_get_bool(&ctx->config, "security",
+    sec_cfg.skip_capabilities = service_config_get_bool(&ctx->config, "security",
                                                 "skip_capabilities",
                                                 sec_cfg.skip_capabilities);
-    sec_cfg.skip_seccomp = config_get_bool(&ctx->config, "security",
+    sec_cfg.skip_seccomp = service_config_get_bool(&ctx->config, "security",
                                            "skip_seccomp", sec_cfg.skip_seccomp);
-    sec_cfg.skip_verify = config_get_bool(&ctx->config, "security",
+    sec_cfg.skip_verify = service_config_get_bool(&ctx->config, "security",
                                           "skip_verify", sec_cfg.skip_verify);
 
     security_manager_t sec_mgr;

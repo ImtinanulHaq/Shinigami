@@ -28,12 +28,13 @@
 #include <unistd.h>
 
 #include <sys/epoll.h>
+#include <sys/socket.h>
 
 /* HAL and ring buffer headers */
-#include "../../../../dev/hal/interface/hal_interface.h"
-#include "../../../../dev/core/ring_buffer.h"
-#include "../../../../dev/core/service_manager/infrastructure/sm_protocol.h"
-#include "../../../../dev/security/verify/verify.h"
+#include "../../dev/hal/interface/hal_interface.h"
+#include "../../dev/core/ring_buffer.h"
+#include "../../dev/core/service_manager/infrastructure/sm_protocol.h"
+#include "../../dev/security/verify/verify.h"
 
 /* ── constants ────────────────────────────────────────────────────────── */
 

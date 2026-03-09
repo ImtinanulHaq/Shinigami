@@ -881,3 +881,34 @@ int camera_hal_capture_frame(hw_device_t *device_ptr, camera_frame_t *frame_out,
  *
  * Uses frame->_buffer_index for O(1) lookup — no linear scan of the buffer
  * array is needed.  Dual validation is performed before the
+ * ioctl before the buffer is re-queued.
+ *
+ * @param device_ptr  Active camera device handle.
+ * @param frame_ptr   Frame descriptor whose _buffer_index was set by capture_frame.
+ * @return HAL_SUCCESS on success, negative HAL_ERROR_* on failure.
+ */
+int camera_hal_return_frame(hw_device_t *device_ptr,
+                            camera_frame_t *frame_ptr)
+{
+    if (!device_ptr || !frame_ptr) return HAL_ERROR_GENERIC;
+
+    camera_priv_t *priv = (camera_priv_t *)device_ptr->priv;
+    if (!priv) return HAL_ERROR_GENERIC;
+
+    if (frame_ptr->_buffer_index >= priv->mmap_buffer_count)
+        return HAL_ERROR_GENERIC;
+
+    struct v4l2_buffer buf;
+    memset(&buf, 0, sizeof(buf));
+    buf.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    buf.index  = frame_ptr->_buffer_index;
+
+    if (ioctl(priv->v4l2_fd, VIDIOC_QBUF, &buf) < 0) {
+        fprintf(stderr, "[camera_hal] VIDIOC_QBUF[%u]: %s\n",
+                frame_ptr->_buffer_index, strerror(errno));
+        return HAL_ERROR_IO;
+    }
+
+    return HAL_SUCCESS;
+}

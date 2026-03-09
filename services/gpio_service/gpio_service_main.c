@@ -66,7 +66,7 @@ static void do_shutdown(gpio_service_ctx_t *ctx, svc_ipc_t *ipc,
             dev->ops->stop(dev);
             dev->ops->close(dev);
         }
-        gpio_hal_destroy(dev);
+        hal_device_destroy(dev);
         ctx->hal_device = NULL;
     }
 
@@ -214,7 +214,7 @@ int main(int argc, char *argv[])
     }
 
     /* ── Step 8: Apply Security Module ───────────────────────────────── */
-    if (gpio_service_security_apply(&g_ctx, &g_cfg) != SVC_OK) {
+    if (gpio_service_apply_security(&g_ctx) != SVC_OK) {
         LOG_ERR("security apply failed — aborting");
         do_shutdown(&g_ctx, &g_ipc, "gpio_service", 0);
         return EXIT_FAILURE;

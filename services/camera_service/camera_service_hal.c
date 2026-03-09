@@ -8,6 +8,7 @@
 
 #include "camera_service_hal.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
 
@@ -77,18 +78,27 @@ int camera_service_hal_capture(camera_service_ctx_t *ctx,
     if (!ctx || !ctx->hal_device || !frame_data || !frame_size)
         return SVC_ERR_INVALID;
 
-    camera_frame_t frame;
-    int rc = camera_hal_capture_frame((hw_device_t *)ctx->hal_device,
-                                      &frame, 1000 /* 1 s timeout */);
-    if (rc != HAL_SUCCESS) {
-        SVC_DBG("camera capture returned %d", rc);
+    hw_device_t *dev = (hw_device_t *)ctx->hal_device;
+    if (!dev->ops || !dev->ops->read)
+        return SVC_ERR_HAL;
+
+    /* Allocate a frame buffer sized to the configured resolution */
+    size_t buf_size = (size_t)(ctx->width * ctx->height * 2); /* e.g. YUYV */
+    if (buf_size == 0) buf_size = 4096;
+
+    void *buf = malloc(buf_size);
+    if (!buf) return SVC_ERR_HAL;
+
+    ssize_t got = dev->ops->read(dev, buf, buf_size);
+    if (got <= 0) {
+        free(buf);
+        SVC_DBG("camera ops->read returned %zd", got);
         return SVC_ERR_HAL;
     }
 
-    *frame_data   = frame.data;
-    *frame_size   = frame.size;
-    if (buffer_index)
-        *buffer_index = frame._buffer_index;
+    *frame_data = buf;
+    *frame_size = (size_t)got;
+    if (buffer_index) *buffer_index = 0;
 
     return SVC_OK;
 }
@@ -98,12 +108,12 @@ int camera_service_hal_return(camera_service_ctx_t *ctx,
 {
     if (!ctx || !ctx->hal_device) return SVC_ERR_INVALID;
 
-    camera_frame_t frame;
-    memset(&frame, 0, sizeof(frame));
-    frame._buffer_index = buffer_index;
+    hw_device_t *dev = (hw_device_t *)ctx->hal_device;
+    if (!dev->ops || !dev->ops->write) return SVC_ERR_HAL;
 
-    camera_hal_return_frame((hw_device_t *)ctx->hal_device, &frame);
-    return SVC_OK;
+    /* Signal buffer return by writing the buffer index via the vtable */
+    ssize_t rc = dev->ops->write(dev, &buffer_index, sizeof(buffer_index));
+    return (rc >= 0) ? SVC_OK : SVC_ERR_HAL;
 }
 
 int camera_service_hal_stop(camera_service_ctx_t *ctx)
@@ -127,6 +137,9 @@ void camera_service_hal_cleanup(camera_service_ctx_t *ctx)
 {
     if (!ctx || !ctx->hal_device) return;
     hw_device_t *dev = (hw_device_t *)ctx->hal_device;
+
+    if (dev->ops && dev->ops->stop)
+        dev->ops->stop(dev);
 
     if (dev->ops && dev->ops->close)
         dev->ops->close(dev);

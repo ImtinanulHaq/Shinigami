@@ -119,6 +119,9 @@ void sensor_service_hal_cleanup(sensor_service_ctx_t *ctx)
     if (!ctx || !ctx->hal_device) return;
     hw_device_t *dev = (hw_device_t *)ctx->hal_device;
 
+    if (dev->ops && dev->ops->stop)
+        dev->ops->stop(dev);
+
     if (dev->ops && dev->ops->close)
         dev->ops->close(dev);
 

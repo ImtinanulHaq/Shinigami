@@ -132,7 +132,10 @@ void audio_service_hal_cleanup(audio_service_ctx_t *ctx)
 
     hw_device_t *dev = (hw_device_t *)ctx->hal_device;
 
-    /* Close before destroy */
+    /* Stop streaming then close before destroy */
+    if (dev->ops && dev->ops->stop)
+        dev->ops->stop(dev);
+
     if (dev->ops && dev->ops->close)
         dev->ops->close(dev);
 

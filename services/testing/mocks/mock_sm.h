@@ -93,6 +93,9 @@ typedef struct {
     uint8_t auth_token[64];
     size_t  auth_token_len;
 
+    /* ── wait_request baseline (updated by mock_sm_wait_request) ── */
+    int last_wait_total;   /**< Total after the last wait_request call.       */
+
     /* ── synchronisation ── */
     pthread_mutex_t lock;   /**< Guards all fields above.                     */
     pthread_cond_t  cond;   /**< Signalled when a request is processed.       */

@@ -194,7 +194,7 @@ TEST(hal_open_error_propagated)
     assert(dev);
 
     mock_hal_priv_t *p = mock_hal_get_priv(dev);
-    p->open_retval = HAL_ERROR_DEVICE;
+    p->open_retval = HAL_ERROR_NO_DEVICE;
 
     int rc = dev->ops->open(dev);
     assert(rc != HAL_SUCCESS);

@@ -93,7 +93,8 @@ typedef struct {
   float offset_y;
   float offset_z;
   int buffer_fd;
-  iio_scan_layout_t
+  iio_scan_layout_t scan_layout;
+} sensor_priv_t;
 
 /* ── control-command specification table ──────────────────────────────── */
 

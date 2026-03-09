@@ -21,10 +21,9 @@ target_include_directories(camera_service PRIVATE
 )
 
 target_link_libraries(camera_service PRIVATE
+    hal_camera_lib hal_interface_lib verify_lib sm_crypto_lib ring_buffer_lib security_manager_lib
     service_common
-    ssl
-    crypto
-    pthread
+    ssl crypto pthread
 )
 
 install(TARGETS camera_service DESTINATION sbin)

@@ -24,11 +24,12 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/epoll.h>
+#include <sys/socket.h>
 
-#include "../../../../dev/hal/interface/hal_interface.h"
-#include "../../../../dev/hal/layers/gpio/gpio_hal.h"
-#include "../../../../dev/core/service_manager/infrastructure/sm_protocol.h"
-#include "../../../../dev/security/verify/verify.h"
+#include "../../dev/hal/interface/hal_interface.h"
+#include "../../dev/hal/layers/gpio/gpio_hal.h"
+#include "../../dev/core/service_manager/infrastructure/sm_protocol.h"
+#include "../../dev/security/verify/verify.h"
 
 /* ── constants ────────────────────────────────────────────────────────── */
 
@@ -164,7 +165,7 @@ static void apply_config_reload(gpio_service_ctx_t *ctx,
     uint32_t new_timeout = service_config_get_uint32(cfg, "hardware",
                                "interrupt_timeout_ms",
                                ctx->interrupt_timeout_ms);
-    if (new_timeout != ctx->interrupt_timeout_ms) {
+    if (new_timeout != (uint32_t)ctx->interrupt_timeout_ms) {
         LOG_INFO("config reload: interrupt_timeout_ms %u → %u",
                  ctx->interrupt_timeout_ms, new_timeout);
         ctx->interrupt_timeout_ms = new_timeout;

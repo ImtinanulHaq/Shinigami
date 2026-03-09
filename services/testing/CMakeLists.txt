@@ -47,7 +47,8 @@ macro(add_svc_test name sources)
     add_executable(${name} ${sources})
     target_include_directories(${name} PRIVATE ${TEST_INCLUDES})
     target_link_libraries(${name} PRIVATE
-        service_common mock_hal mock_sm
+        service_common mock_hal mock_sm verify_lib
+        hal_interface_lib sm_crypto_lib ring_buffer_lib security_manager_lib
         ssl crypto pthread)
     add_test(NAME ${name} COMMAND ${name})
 endmacro()
@@ -62,26 +63,34 @@ add_svc_test(test_service_ipc
 
 add_svc_test(test_audio_hal_layer
     "unit/test_audio_hal_layer.c;${CMAKE_SOURCE_DIR}/audio_service/audio_service_hal.c")
+target_link_libraries(test_audio_hal_layer PRIVATE hal_audio_lib)
 
 add_svc_test(test_camera_hal_layer
     "unit/test_camera_hal_layer.c;${CMAKE_SOURCE_DIR}/camera_service/camera_service_hal.c")
+target_link_libraries(test_camera_hal_layer PRIVATE hal_camera_lib)
 
 add_svc_test(test_sensor_hal_layer
     "unit/test_sensor_hal_layer.c;${CMAKE_SOURCE_DIR}/sensor_service/sensor_service_hal.c")
+target_link_libraries(test_sensor_hal_layer PRIVATE hal_sensor_lib)
 
 add_svc_test(test_gpio_hal_layer
     "unit/test_gpio_hal_layer.c;${CMAKE_SOURCE_DIR}/gpio_service/gpio_service_hal.c")
+target_link_libraries(test_gpio_hal_layer PRIVATE hal_gpio_lib)
 
 # ── integration tests ─────────────────────────────────────────────────────
 
 add_svc_test(test_audio_full
     "integration/test_audio_full.c;${CMAKE_SOURCE_DIR}/audio_service/audio_service_hal.c")
+target_link_libraries(test_audio_full PRIVATE hal_audio_lib)
 
 add_svc_test(test_camera_full
     "integration/test_camera_full.c;${CMAKE_SOURCE_DIR}/camera_service/camera_service_hal.c")
+target_link_libraries(test_camera_full PRIVATE hal_camera_lib)
 
 add_svc_test(test_sensor_full
     "integration/test_sensor_full.c;${CMAKE_SOURCE_DIR}/sensor_service/sensor_service_hal.c")
+target_link_libraries(test_sensor_full PRIVATE hal_sensor_lib)
 
 add_svc_test(test_gpio_full
     "integration/test_gpio_full.c;${CMAKE_SOURCE_DIR}/gpio_service/gpio_service_hal.c")
+target_link_libraries(test_gpio_full PRIVATE hal_gpio_lib)

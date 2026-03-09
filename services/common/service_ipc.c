@@ -26,9 +26,9 @@
 #include <sys/un.h>
 
 /* Pull in SM wire protocol */
-#include "../../../../dev/core/service_manager/infrastructure/sm_protocol.h"
+#include "../../dev/core/service_manager/infrastructure/sm_protocol.h"
 /* Pull in Verify module */
-#include "../../../../dev/security/verify/verify.h"
+#include "../../dev/security/verify/verify.h"
 
 /* ── extended registration payload ───────────────────────────────────── */
 

@@ -72,12 +72,12 @@ static void teardown_sm(void)
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
 
-static service_ipc_t *make_connected_ipc(void)
+static svc_ipc_t *make_connected_ipc(void)
 {
-    service_ipc_t *ipc = calloc(1, sizeof(*ipc));
+    svc_ipc_t *ipc = calloc(1, sizeof(*ipc));
     assert(ipc);
     assert(service_ipc_init(ipc, SENSOR_SERVICE_NAME, NULL) == SVC_OK);
-    ipc->socket_path = MOCK_SOCK;
+    strncpy(ipc->socket_path, MOCK_SOCK, sizeof(ipc->socket_path) - 1);
     assert(service_ipc_connect(ipc) == SVC_OK);
     return ipc;
 }
@@ -106,7 +106,7 @@ TEST(full_lifecycle_register_unregister)
 {
     setup_sm();
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/sensor_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
@@ -141,7 +141,7 @@ TEST(full_read_3axis_with_ipc)
     sensor_service_ctx_t ctx;
     make_sensor_ctx(&ctx, dev, 1);
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/sensor_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
@@ -178,7 +178,7 @@ TEST(full_read_scalar_with_ipc)
     sensor_service_ctx_t ctx;
     make_sensor_ctx(&ctx, dev, 4);
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/sensor_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
@@ -205,16 +205,14 @@ TEST(full_send_health_ok)
 {
     setup_sm();
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/sensor_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
 
     svc_health_status_t st = {
-        .is_healthy     = 1,
-        .uptime_seconds = 30,
+        .uptime_sec = 30,
         .error_count    = 0,
-        .last_error     = SVC_OK,
     };
     assert(service_ipc_send_health(ipc, &st) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);
@@ -232,7 +230,7 @@ TEST(full_sm_send_reload)
 {
     setup_sm();
 
-    service_ipc_t *ipc = make_connected_ipc();
+    svc_ipc_t *ipc = make_connected_ipc();
     assert(service_ipc_register(ipc, "/usr/sbin/sensor_service", "1.0.0",
                                 (uint32_t)getpid()) == SVC_OK);
     mock_sm_wait_request(&g_sm, WAIT_TIMEOUT_MS);

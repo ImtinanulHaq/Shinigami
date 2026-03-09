@@ -25,11 +25,12 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/epoll.h>
+#include <sys/socket.h>
 
-#include "../../../../dev/hal/interface/hal_interface.h"
-#include "../../../../dev/hal/layers/sensors/sensor_hal.h"
-#include "../../../../dev/core/service_manager/infrastructure/sm_protocol.h"
-#include "../../../../dev/security/verify/verify.h"
+#include "../../dev/hal/interface/hal_interface.h"
+#include "../../dev/hal/layers/sensors/sensor_hal.h"
+#include "../../dev/core/service_manager/infrastructure/sm_protocol.h"
+#include "../../dev/security/verify/verify.h"
 
 /* ── constants ────────────────────────────────────────────────────────── */
 

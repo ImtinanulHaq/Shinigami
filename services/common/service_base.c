@@ -37,6 +37,15 @@ static void _sig_hup(int sig)
     g_reload = 1;
 }
 
+/* ── private helpers ──────────────────────────────────────────────────── */
+
+/** @brief Return the PID directory, honouring the SVC_PID_DIR env override. */
+static const char *_pid_dir(void)
+{
+    const char *env = getenv("SVC_PID_DIR");
+    return (env && env[0]) ? env : SERVICE_PID_DIR;
+}
+
 /* ── public API ───────────────────────────────────────────────────────── */
 
 int service_base_init(svc_context_t *ctx, const char *name)
@@ -48,7 +57,7 @@ int service_base_init(svc_context_t *ctx, const char *name)
     strncpy(ctx->name, name, SERVICE_MAX_NAME - 1);
     strncpy(ctx->version, SERVICE_LAYER_VERSION_STR, SERVICE_MAX_VERSION - 1);
     snprintf(ctx->pid_path, sizeof(ctx->pid_path),
-             SERVICE_PID_DIR "/%s.pid", name);
+             "%s/%s.pid", _pid_dir(), name);
     ctx->state      = SVC_STATE_INIT;
     ctx->start_time = time(NULL);
 
@@ -139,7 +148,7 @@ int service_base_write_pid(const char *svc_name)
         return SVC_ERR_INVALID;
 
     char path[SERVICE_MAX_PATH];
-    snprintf(path, sizeof(path), SERVICE_PID_DIR "/%s.pid", svc_name);
+    snprintf(path, sizeof(path), "%s/%s.pid", _pid_dir(), svc_name);
 
     /* ── Duplicate-instance check ─────────────── */
     FILE *fp = fopen(path, "r");
@@ -174,7 +183,7 @@ void service_base_remove_pid(const char *svc_name)
 {
     if (!svc_name) return;
     char path[SERVICE_MAX_PATH];
-    snprintf(path, sizeof(path), SERVICE_PID_DIR "/%s.pid", svc_name);
+    snprintf(path, sizeof(path), "%s/%s.pid", _pid_dir(), svc_name);
     unlink(path);
 }
 

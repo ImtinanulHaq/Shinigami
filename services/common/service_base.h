@@ -27,6 +27,11 @@
 #define SERVICE_MAX_PATH    256
 #define SERVICE_MAX_VERSION 32
 
+/* Default PID directory — overridden at runtime via SVC_PID_DIR env var */
+#ifndef SERVICE_PID_DIR
+#define SERVICE_PID_DIR "/run"
+#endif
+
 /* ── global control flags (set by sigaction handlers) ────────────────── */
 
 /**
@@ -97,6 +102,17 @@ typedef struct {
 
 /* ── dual-sink log macros (syslog + file) ─────────────────────────────── */
 
+/* Use numeric syslog priority constants directly to avoid shadowing
+ * issues after we redefine LOG_ERR / LOG_INFO / LOG_DEBUG below. */
+#define _PRIO_ERR   3   /* == LOG_ERR   from syslog.h */
+#define _PRIO_INFO  6   /* == LOG_INFO  from syslog.h */
+#define _PRIO_DEBUG 7   /* == LOG_DEBUG from syslog.h */
+
+/* Shadow the syslog names with service-layer function-like macros */
+#undef LOG_ERR
+#undef LOG_INFO
+#undef LOG_DEBUG
+
 #define _SVC_LOG(pri, tag, fmt, ...) do {                                  \
     syslog(LOG_DAEMON | (pri), "[" tag "] [%s] " fmt,                     \
            __func__, ##__VA_ARGS__);                                       \
@@ -107,10 +123,16 @@ typedef struct {
     }                                                                      \
 } while (0)
 
-#define LOG_ERR(fmt, ...)   _SVC_LOG(LOG_ERR,     "ERR ", fmt, ##__VA_ARGS__)
-#define LOG_WARN(fmt, ...)  _SVC_LOG(LOG_WARNING, "WARN", fmt, ##__VA_ARGS__)
-#define LOG_INFO(fmt, ...)  _SVC_LOG(LOG_INFO,    "INFO", fmt, ##__VA_ARGS__)
-#define LOG_DEBUG(fmt, ...) _SVC_LOG(LOG_DEBUG,   "DBG ", fmt, ##__VA_ARGS__)
+#define LOG_ERR(fmt, ...)   _SVC_LOG(_PRIO_ERR,   "ERR ", fmt, ##__VA_ARGS__)
+#define LOG_WARN(fmt, ...)  _SVC_LOG(LOG_WARNING,  "WARN", fmt, ##__VA_ARGS__)
+#define LOG_INFO(fmt, ...)  _SVC_LOG(_PRIO_INFO,   "INFO", fmt, ##__VA_ARGS__)
+#define LOG_DEBUG(fmt, ...) _SVC_LOG(_PRIO_DEBUG,  "DBG ", fmt, ##__VA_ARGS__)
+
+/* Short-form aliases used inside *_service_hal.c */
+#define SVC_ERR   LOG_ERR
+#define SVC_WARN  LOG_WARN
+#define SVC_INFO  LOG_INFO
+#define SVC_DBG   LOG_DEBUG
 
 /* ── public API ───────────────────────────────────────────────────────── */
 

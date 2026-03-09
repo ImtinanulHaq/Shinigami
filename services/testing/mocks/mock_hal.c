@@ -153,13 +153,13 @@ static int mock_get_info(hw_device_t *dev, void *info)
     return HAL_SUCCESS;
 }
 
-static void mock_destroy(hw_device_t *dev)
+static int mock_destroy(hw_device_t *dev)
 {
     mock_hal_priv_t *p = PRIV(dev);
     LOCK(p);
     p->counts.destroy_calls++;
     UNLOCK(p);
-    /* Caller must still call mock_hal_destroy() */
+    return 0;
 }
 
 static const hw_device_ops_t g_mock_ops = {
@@ -171,7 +171,7 @@ static const hw_device_ops_t g_mock_ops = {
     .write    = mock_write,
     .control  = mock_control,
     .get_info = mock_get_info,
-    .destroy  = mock_destroy,
+    .reset    = mock_destroy,   /* mapped to reset slot; tracks destroy_calls */
 };
 
 /* ── public API ───────────────────────────────────────────────────────── */
