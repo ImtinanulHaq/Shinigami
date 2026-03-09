@@ -49,6 +49,7 @@ macro(add_svc_test name sources)
     target_link_libraries(${name} PRIVATE
         service_common mock_hal mock_sm verify_lib
         hal_interface_lib sm_crypto_lib ring_buffer_lib security_manager_lib
+        io_uring_loop_lib memory_pool_lib
         ssl crypto pthread)
     add_test(NAME ${name} COMMAND ${name})
 endmacro()

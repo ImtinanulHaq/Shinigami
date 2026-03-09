@@ -14,6 +14,7 @@
 #include "../common/service_config.h"
 #include "../common/service_ipc.h"
 #include "hal_interface.h"
+#include "../../dev/core/memory_pool.h"
 
 #include <stdint.h>
 
@@ -52,6 +53,10 @@ typedef struct {
     uint32_t        period_size;
     uint32_t        buffer_size;
     int             direction;     /**< 0=playback, 1=capture              */
+
+    /* Memory pools */
+    memory_pool_t  *frame_pool;    /**< PCM frame staging buffers (period_size * ch * 2 B × 8). */
+    memory_pool_t  *ipc_pool;      /**< IPC message buffers (512 B × 64).                    */
 } audio_service_ctx_t;
 
 /* ── lifecycle API ────────────────────────────────────────────────────── */

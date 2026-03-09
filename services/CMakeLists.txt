@@ -104,6 +104,22 @@ add_library(ring_buffer_lib STATIC
 target_include_directories(ring_buffer_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/../dev/core)
 
+# ── memory pool library ─────────────────────────────────────────────────
+add_library(memory_pool_lib STATIC
+    ${CMAKE_SOURCE_DIR}/../dev/core/memory_pool.c
+)
+target_include_directories(memory_pool_lib PUBLIC
+    ${CMAKE_SOURCE_DIR}/../dev/core)
+target_link_libraries(memory_pool_lib PRIVATE pthread)
+
+# ── io_uring event loop library ─────────────────────────────────────────
+add_library(io_uring_loop_lib STATIC
+    ${CMAKE_SOURCE_DIR}/../dev/core/io_uring_loop.c
+)
+target_include_directories(io_uring_loop_lib PUBLIC
+    ${CMAKE_SOURCE_DIR}/../dev/core)
+target_link_libraries(io_uring_loop_lib PUBLIC memory_pool_lib uring)
+
 # ── SM crypto library (HMAC primitives used by verify_lib) ───────────────
 add_library(sm_crypto_lib STATIC
     ${CMAKE_SOURCE_DIR}/../dev/core/service_manager/security/sm_crypto.c

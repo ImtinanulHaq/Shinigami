@@ -61,6 +61,10 @@ static void do_shutdown(camera_service_ctx_t *ctx, svc_ipc_t *ipc,
 {
     ctx->base.state = SVC_STATE_STOPPING;
 
+    /* Destroy memory pools before HAL */
+    if (ctx->frame_pool) { memory_pool_destroy(ctx->frame_pool); ctx->frame_pool = NULL; }
+    if (ctx->ipc_pool)   { memory_pool_destroy(ctx->ipc_pool);   ctx->ipc_pool   = NULL; }
+
     if (ctx->hal_device) {
         hw_device_t *dev = (hw_device_t *)ctx->hal_device;
         if (hal_started && dev->ops) {
@@ -240,6 +244,31 @@ int main(int argc, char *argv[])
     }
     LOG_INFO("camera HAL on %s started (%ux%u @ %ufps)",
              g_ctx.v4l2_device, g_ctx.width, g_ctx.height, g_ctx.fps);
+
+    /* ── Step 9b: Create memory pools ──────────────────────────────── */
+    {
+        size_t frame_sz = (size_t)g_ctx.width * g_ctx.height * 2u; /* YUYV */
+        size_t buf_cnt  = g_ctx.buffer_count > 0 ? g_ctx.buffer_count : 4u;
+        memory_pool_config_t fcfg = {
+            .block_size  = frame_sz,
+            .block_count = buf_cnt,
+            .thread_safe = 0,
+            .name        = "camera_frame_pool"
+        };
+        g_ctx.frame_pool = memory_pool_create(&fcfg);
+        if (!g_ctx.frame_pool)
+            LOG_WARN("camera frame pool creation failed — continuing without pool");
+
+        memory_pool_config_t icfg = {
+            .block_size  = 512,
+            .block_count = 64,
+            .thread_safe = 0,
+            .name        = "camera_ipc_pool"
+        };
+        g_ctx.ipc_pool = memory_pool_create(&icfg);
+        if (!g_ctx.ipc_pool)
+            LOG_WARN("camera IPC pool creation failed — continuing without pool");
+    }
 
     g_ctx.base.state = SVC_STATE_RUNNING;
 

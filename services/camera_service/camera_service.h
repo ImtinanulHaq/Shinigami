@@ -10,6 +10,7 @@
 #include "../common/service_config.h"
 #include "../common/service_ipc.h"
 #include "hal_interface.h"
+#include "../../dev/core/memory_pool.h"
 
 #include <stdint.h>
 
@@ -40,6 +41,10 @@ typedef struct {
     uint32_t        fps;
     uint32_t        buffer_count;
     int             format;        /**< camera_format_t enum value          */
+
+    /* Memory pools */
+    memory_pool_t  *frame_pool;    /**< Frame buffers (width * height * 2 B × buffer_count). */
+    memory_pool_t  *ipc_pool;      /**< IPC message buffers (512 B × 64).                    */
 } camera_service_ctx_t;
 
 /* ── lifecycle API ────────────────────────────────────────────────────── */

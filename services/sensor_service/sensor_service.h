@@ -10,6 +10,7 @@
 #include "../common/service_config.h"
 #include "../common/service_ipc.h"
 #include "hal_interface.h"
+#include "../../dev/core/memory_pool.h"
 
 #include <stdint.h>
 
@@ -36,6 +37,10 @@ typedef struct {
     uint32_t        sampling_rate_hz;
     int             sensor_type;   /**< sensor_type_t enum value            */
     int             enable_buffer; /**< Non-zero for IIO buffer mode        */
+
+    /* Memory pools */
+    memory_pool_t  *reading_pool;  /**< sensor_reading_t structs (32 B × 32). */
+    memory_pool_t  *ipc_pool;      /**< IPC message buffers (512 B × 64).     */
 } sensor_service_ctx_t;
 
 /* ── lifecycle API ────────────────────────────────────────────────────── */

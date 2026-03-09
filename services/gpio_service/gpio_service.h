@@ -10,6 +10,7 @@
 #include "../common/service_config.h"
 #include "../common/service_ipc.h"
 #include "hal_interface.h"
+#include "../../dev/core/memory_pool.h"
 
 #include <stdint.h>
 
@@ -37,6 +38,9 @@ typedef struct {
     int                 initial_value; /**< gpio_value_t enum value         */
     int                 edge;          /**< gpio_edge_t enum value          */
     int                 interrupt_timeout_ms; /**< cast-compatible with uint32_t */
+
+    /* Memory pools */
+    memory_pool_t      *ipc_pool;  /**< IPC message buffers (512 B × 64). */
 } gpio_service_ctx_t;
 
 /* ── lifecycle API ────────────────────────────────────────────────────── */

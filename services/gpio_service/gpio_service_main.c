@@ -59,6 +59,9 @@ static void do_shutdown(gpio_service_ctx_t *ctx, svc_ipc_t *ipc,
 {
     ctx->base.state = SVC_STATE_STOPPING;
 
+    /* Destroy memory pools before HAL */
+    if (ctx->ipc_pool) { memory_pool_destroy(ctx->ipc_pool); ctx->ipc_pool = NULL; }
+
     /* Stop and destroy each pin's HAL device */
     if (ctx->hal_device) {
         hw_device_t *dev = (hw_device_t *)ctx->hal_device;
@@ -235,6 +238,19 @@ int main(int argc, char *argv[])
              g_ctx.chip, g_ctx.pin_number,
              g_ctx.direction ? "output" : "input",
              edge_str);
+
+    /* ── Step 9b: Create memory pools ──────────────────────────────── */
+    {
+        memory_pool_config_t icfg = {
+            .block_size  = 512,
+            .block_count = 64,
+            .thread_safe = 0,
+            .name        = "gpio_ipc_pool"
+        };
+        g_ctx.ipc_pool = memory_pool_create(&icfg);
+        if (!g_ctx.ipc_pool)
+            LOG_WARN("gpio IPC pool creation failed — continuing without pool");
+    }
 
     g_ctx.base.state = SVC_STATE_RUNNING;
 

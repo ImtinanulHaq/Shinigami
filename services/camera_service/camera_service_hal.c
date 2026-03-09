@@ -86,12 +86,17 @@ int camera_service_hal_capture(camera_service_ctx_t *ctx,
     size_t buf_size = (size_t)(ctx->width * ctx->height * 2); /* e.g. YUYV */
     if (buf_size == 0) buf_size = 4096;
 
-    void *buf = malloc(buf_size);
+    /* Use memory pool when available; fall back to malloc if pool is NULL */
+    void *buf = ctx->frame_pool ? memory_pool_alloc(ctx->frame_pool)
+                                : malloc(buf_size);
     if (!buf) return SVC_ERR_HAL;
 
     ssize_t got = dev->ops->read(dev, buf, buf_size);
     if (got <= 0) {
-        free(buf);
+        if (ctx->frame_pool)
+            memory_pool_free(ctx->frame_pool, buf);
+        else
+            free(buf);
         SVC_DBG("camera ops->read returned %zd", got);
         return SVC_ERR_HAL;
     }

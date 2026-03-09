@@ -67,6 +67,10 @@ static void do_shutdown(audio_service_ctx_t *ctx, svc_ipc_t *ipc,
 {
     ctx->base.state = SVC_STATE_STOPPING;
 
+    /* Destroy memory pools before HAL */
+    if (ctx->frame_pool) { memory_pool_destroy(ctx->frame_pool); ctx->frame_pool = NULL; }
+    if (ctx->ipc_pool)   { memory_pool_destroy(ctx->ipc_pool);   ctx->ipc_pool   = NULL; }
+
     /* Step 11a — stop / close / destroy HAL */
     if (ctx->hal_device) {
         hw_device_t *dev = (hw_device_t *)ctx->hal_device;
@@ -256,6 +260,29 @@ int main(int argc, char *argv[])
     }
     LOG_INFO("audio HAL on device '%s' started (rate=%u, ch=%u)",
              g_ctx.alsa_device, g_ctx.sample_rate, g_ctx.channels);
+
+    /* ── Step 9b: Create memory pools ──────────────────────────────── */
+    {
+        memory_pool_config_t pcfg = {
+            .block_size  = (size_t)g_ctx.period_size * g_ctx.channels * 2u,
+            .block_count = 8,
+            .thread_safe = 0,
+            .name        = "audio_frame_pool"
+        };
+        g_ctx.frame_pool = memory_pool_create(&pcfg);
+        if (!g_ctx.frame_pool)
+            LOG_WARN("audio frame pool creation failed — continuing without pool");
+
+        memory_pool_config_t icfg = {
+            .block_size  = 512,
+            .block_count = 64,
+            .thread_safe = 0,
+            .name        = "audio_ipc_pool"
+        };
+        g_ctx.ipc_pool = memory_pool_create(&icfg);
+        if (!g_ctx.ipc_pool)
+            LOG_WARN("audio IPC pool creation failed — continuing without pool");
+    }
 
     g_ctx.base.state = SVC_STATE_RUNNING;
 

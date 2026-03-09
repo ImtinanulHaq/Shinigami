@@ -60,6 +60,10 @@ static void do_shutdown(sensor_service_ctx_t *ctx, svc_ipc_t *ipc,
 {
     ctx->base.state = SVC_STATE_STOPPING;
 
+    /* Destroy memory pools before HAL */
+    if (ctx->reading_pool) { memory_pool_destroy(ctx->reading_pool); ctx->reading_pool = NULL; }
+    if (ctx->ipc_pool)     { memory_pool_destroy(ctx->ipc_pool);     ctx->ipc_pool     = NULL; }
+
     if (ctx->hal_device) {
         hw_device_t *dev = (hw_device_t *)ctx->hal_device;
         if (hal_started && dev->ops) {
@@ -232,6 +236,29 @@ int main(int argc, char *argv[])
     }
     LOG_INFO("sensor HAL on %s started (type=%s, rate=%u Hz)",
              g_ctx.iio_device, stype, g_ctx.sampling_rate_hz);
+
+    /* ── Step 9b: Create memory pools ──────────────────────────────── */
+    {
+        memory_pool_config_t rcfg = {
+            .block_size  = sizeof(sensor_reading_t),
+            .block_count = 32,
+            .thread_safe = 0,
+            .name        = "sensor_reading_pool"
+        };
+        g_ctx.reading_pool = memory_pool_create(&rcfg);
+        if (!g_ctx.reading_pool)
+            LOG_WARN("sensor reading pool creation failed — continuing without pool");
+
+        memory_pool_config_t icfg = {
+            .block_size  = 512,
+            .block_count = 64,
+            .thread_safe = 0,
+            .name        = "sensor_ipc_pool"
+        };
+        g_ctx.ipc_pool = memory_pool_create(&icfg);
+        if (!g_ctx.ipc_pool)
+            LOG_WARN("sensor IPC pool creation failed — continuing without pool");
+    }
 
     g_ctx.base.state = SVC_STATE_RUNNING;
 
