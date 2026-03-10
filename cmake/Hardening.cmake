@@ -54,8 +54,8 @@ function(mw_apply_hardening target)
     # Fortify source — catches common buffer/string bugs at runtime
     # Use _FORTIFY_SOURCE=3 if available (GCC 12+), fall back to 2
     _mw_check_c_flag("-D_FORTIFY_SOURCE=3" _common_flags)
-    if(NOT "HAVE_C-D_FORTIFY_SOURCE=3")
-        _mw_check_c_flag("-D_FORTIFY_SOURCE=2" _common_flags)
+    if(NOT HAVE_C_D_FORTIFY_SOURCE_3)
+	    _mw_check_c_flag("-D_FORTIFY_SOURCE=2" _common_flags)
     endif()
 
     # Wipe stack allocations to zero on function entry (Clang)

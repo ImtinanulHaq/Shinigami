@@ -41,6 +41,7 @@ target_include_directories(mw_proxy_base
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/base>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+	$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/dev>
 )
 target_link_libraries(mw_proxy_base
     PUBLIC
@@ -62,7 +63,7 @@ target_include_directories(mw_proxy_auth
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/security>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/base>
 )
-target_link_libraries(mw_proxy_auth PUBLIC mw_proxy_base OpenSSL::Crypto)
+target_link_libraries(mw_proxy_auth PUBLIC mw_proxy_base OpenSSL::Crypto mw::sec_verify)
 set_target_properties(mw_proxy_auth PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Service discovery (queries SM registry)
@@ -129,7 +130,9 @@ target_link_libraries(mw_proxy
         mw_proxy_gpio
         mw_proxy_sensor
         mw::core
+	mw::sm
         OpenSSL::Crypto
+	mw::sec_verify
         Threads::Threads
         ${CMAKE_DL_LIBS}
 )
