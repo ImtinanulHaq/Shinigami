@@ -53,6 +53,7 @@ cleanup() {
     pkill -f "sensor_hal" 2>/dev/null || true
     pkill -f "gpio_hal" 2>/dev/null || true
     pkill -f "middleware_monitord" 2>/dev/null || true
+    pkill -f "middleware_monitor" 2>/dev/null || true
     pkill -f "middleware_monitor_tui" 2>/dev/null || true
     
     # Clean up socket files
@@ -109,6 +110,7 @@ fi
 cd "$WORKSPACE" || exit 1
 
 # Check if monitoring system exists
+MONITOR_STANDALONE="$WORKSPACE/monitoring/build/middleware_monitor"
 MONITOR_TUI="$WORKSPACE/monitoring/build/middleware_monitor_tui"
 MONITOR_DAEMON="$WORKSPACE/monitoring/build/middleware_monitord"
 
@@ -353,7 +355,11 @@ echo -e "${MAGENTA}   ESC - Exit${NC}"
 echo -e "${MAGENTA}═══════════════════════════════════════════════════════════${NC}"
 sleep 2
 
-# Launch monitor TUI (blocking)
-$MONITOR_TUI
+# Launch monitor TUI (blocking) — prefer standalone binary
+if [ -f "$MONITOR_STANDALONE" ]; then
+    "$MONITOR_STANDALONE"
+else
+    "$MONITOR_TUI"
+fi
 
 # When monitor exits, cleanup will be called automatically
