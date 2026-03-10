@@ -46,11 +46,38 @@
  * ══════════════════════════════════════════════════════════════════════════ */
 
 #define MAX_SERVICES     16
-#define MAX_LOG_LINES    256
+#define MAX_LOG_LINES    512
 #define MAX_ALERTS       64
 #define SERVICE_NAME_LEN 64
 #define LOG_LINE_LEN     256
 #define TAB_COUNT        9
+
+/* Log levels */
+typedef enum {
+    LL_DEBUG = 0,
+    LL_INFO  = 1,
+    LL_WARN  = 2,
+    LL_ERROR = 3
+} log_level_t;
+
+/* Log categories */
+typedef enum {
+    LC_SYSTEM  = 0,
+    LC_SERVICE = 1,
+    LC_HAL     = 2,
+    LC_MEMORY  = 3,
+    LC_IO      = 4,
+    LC_SECURITY= 5,
+    LC_HEALTH  = 6,
+    LC_NET     = 7
+} log_cat_t;
+
+typedef struct {
+    time_t       ts;
+    log_level_t  level;
+    log_cat_t    cat;
+    char         msg[LOG_LINE_LEN];
+} log_entry_t;
 
 /* Color pair IDs */
 #define CP_DEFAULT      1
@@ -132,12 +159,12 @@ typedef struct {
     /* System-wide fd/network */
     long fd_used;
 
-    /* Log ring buffer */
-    char   log_lines[MAX_LOG_LINES][LOG_LINE_LEN];
-    int    log_head;
-    int    log_count;
+    /* Structured log ring buffer */
+    log_entry_t log_entries[MAX_LOG_LINES];
+    int         log_head;
+    int         log_count;
 
-    /* Alerts */
+    /* Alerts (kept separate for the Alerts panel) */
     char   alert_lines[MAX_ALERTS][LOG_LINE_LEN];
     int    alert_count;
 
@@ -458,22 +485,35 @@ static const char *KNOWN_SERVICES[] = {
     NULL
 };
 
-static void add_log(monitor_data_t *d, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-static void add_log(monitor_data_t *d, const char *fmt, ...)
+/* Write a structured log entry */
+static void add_logex(monitor_data_t *d, log_level_t lvl, log_cat_t cat,
+                      const char *fmt, ...) __attribute__((format(printf, 4, 5)));
+static void add_logex(monitor_data_t *d, log_level_t lvl, log_cat_t cat,
+                      const char *fmt, ...)
 {
+    int idx = (d->log_head + d->log_count) % MAX_LOG_LINES;
+    log_entry_t *e = &d->log_entries[idx];
+    e->ts    = time(NULL);
+    e->level = lvl;
+    e->cat   = cat;
     va_list ap;
     va_start(ap, fmt);
-    int idx = (d->log_head + d->log_count) % MAX_LOG_LINES;
-    vsnprintf(d->log_lines[idx], LOG_LINE_LEN, fmt, ap);
+    vsnprintf(e->msg, LOG_LINE_LEN, fmt, ap);
     va_end(ap);
     if (d->log_count < MAX_LOG_LINES) d->log_count++;
     else d->log_head = (d->log_head + 1) % MAX_LOG_LINES;
 }
 
+/* Convenience macros */
+#define LOG_DEBUG(d,cat,...)  add_logex((d), LL_DEBUG, (cat), __VA_ARGS__)
+#define LOG_INFO(d,cat,...)   add_logex((d), LL_INFO,  (cat), __VA_ARGS__)
+#define LOG_WARN(d,cat,...)   add_logex((d), LL_WARN,  (cat), __VA_ARGS__)
+#define LOG_ERR(d,cat,...)    add_logex((d), LL_ERROR, (cat), __VA_ARGS__)
+
 static void add_alert(monitor_data_t *d, const char *msg)
 {
     if (d->alert_count < MAX_ALERTS) {
-        snprintf(d->alert_lines[d->alert_count++], LOG_LINE_LEN, "[ALERT] %s", msg);
+        snprintf(d->alert_lines[d->alert_count++], LOG_LINE_LEN, "%s", msg);
     }
 }
 
@@ -601,24 +641,74 @@ static void check_alerts(monitor_data_t *d)
 {
     static int prev_service_count = -1;
 
+    /* Track health changes per service */
+    static int prev_health[MAX_SERVICES];
+    static char prev_names[MAX_SERVICES][SERVICE_NAME_LEN];
+    static int health_initialized = 0;
+
     for (int i = 0; i < d->service_count; i++) {
         service_data_t *s = &d->services[i];
+
+        /* CPU alert */
         if (s->cpu_pct > 90.0f) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "%s CPU high: %.1f%%", s->name, s->cpu_pct);
-            if (d->alert_count < MAX_ALERTS) add_alert(d, buf);
+            char buf[192];
+            snprintf(buf, sizeof(buf), "%s CPU critical: %.1f%%  RAM:%ldMB  PID:%d",
+                     s->name, s->cpu_pct, s->rss_kb/1024, s->pid);
+            add_alert(d, buf);
+            LOG_ERR(d, LC_SERVICE, "CPU CRITICAL  %-16s  %.1f%%  (PID %d)",
+                    s->name, s->cpu_pct, s->pid);
+        } else if (s->cpu_pct > 75.0f) {
+            LOG_WARN(d, LC_SERVICE, "CPU HIGH      %-16s  %.1f%%",
+                     s->name, s->cpu_pct);
         }
-        if (s->health_score < 50) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "%s health critical: %d/100", s->name, s->health_score);
-            if (d->alert_count < MAX_ALERTS) add_alert(d, buf);
+
+        /* Health change */
+        if (health_initialized) {
+            for (int j = 0; j < prev_service_count; j++) {
+                if (strcmp(prev_names[j], s->name) == 0 &&
+                    abs(prev_health[j] - s->health_score) >= 10) {
+                    if (s->health_score < prev_health[j]) {
+                        LOG_WARN(d, LC_HEALTH, "Health DROP   %-16s  %d -> %d",
+                                 s->name, prev_health[j], s->health_score);
+                        if (s->health_score < 50) {
+                            char buf[192];
+                            snprintf(buf, sizeof(buf),
+                                     "%s health critical: %d/100 (was %d)",
+                                     s->name, s->health_score, prev_health[j]);
+                            add_alert(d, buf);
+                        }
+                    } else {
+                        LOG_INFO(d, LC_HEALTH, "Health UP     %-16s  %d -> %d",
+                                 s->name, prev_health[j], s->health_score);
+                    }
+                    break;
+                }
+            }
+        }
+
+        /* FD warning */
+        if (s->fd_count > 500) {
+            LOG_WARN(d, LC_IO, "FD HIGH       %-16s  %d fds  (PID %d)",
+                     s->name, s->fd_count, s->pid);
         }
     }
 
     if (prev_service_count >= 0 && d->service_count < prev_service_count) {
-        add_log(d, "[WARN] Service count dropped: %d -> %d", prev_service_count, d->service_count);
+        LOG_WARN(d, LC_SERVICE, "Service count dropped: %d -> %d",
+                 prev_service_count, d->service_count);
+    } else if (prev_service_count >= 0 && d->service_count > prev_service_count) {
+        LOG_INFO(d, LC_SERVICE, "Service count increased: %d -> %d",
+                 prev_service_count, d->service_count);
     }
+
+    /* Save state for next call */
     prev_service_count = d->service_count;
+    for (int i = 0; i < d->service_count && i < MAX_SERVICES; i++) {
+        prev_health[i] = d->services[i].health_score;
+        strncpy(prev_names[i], d->services[i].name, SERVICE_NAME_LEN - 1);
+        prev_names[i][SERVICE_NAME_LEN - 1] = '\0';
+    }
+    health_initialized = 1;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -641,7 +731,7 @@ static void *data_collector_thread(void *arg)
         pthread_mutex_lock(&g_lock);
         memcpy(&tmp.services, &g_data.services, sizeof(g_data.services));
         tmp.service_count = g_data.service_count;
-        memcpy(&tmp.log_lines, &g_data.log_lines, sizeof(g_data.log_lines));
+        memcpy(&tmp.log_entries, &g_data.log_entries, sizeof(g_data.log_entries));
         tmp.log_head  = g_data.log_head;
         tmp.log_count = g_data.log_count;
         memcpy(&tmp.alert_lines, &g_data.alert_lines, sizeof(g_data.alert_lines));
@@ -696,12 +786,49 @@ static void *data_collector_thread(void *arg)
 
         /* Alerts & logging */
         check_alerts(&tmp);
-        add_log(&tmp, "[%ld] CPU:%.1f%% RAM:%ldMB/%ldMB Load:%.2f",
-                (long)time(NULL) % 100000,
-                tmp.cpu_total_pct,
-                tmp.ram_used_kb / 1024,
-                tmp.ram_total_kb / 1024,
-                tmp.load_1);
+        /* Periodic system metrics log */
+        LOG_INFO(&tmp, LC_SYSTEM,
+                 "CPU:%.1f%%(io+%.1f%%)  RAM:%ld/%ldMB  Swap:%ld/%ldMB  Load:%.2f/%.2f/%.2f  Up:%ld d",
+                 tmp.cpu_total_pct, tmp.cpu_iowait_pct,
+                 tmp.ram_used_kb/1024, tmp.ram_total_kb/1024,
+                 tmp.swap_used_kb/1024, tmp.swap_total_kb/1024,
+                 tmp.load_1, tmp.load_5, tmp.load_15,
+                 tmp.uptime_s / 86400);
+
+        /* SM socket status change logging */
+        static int prev_sm_ok = -1;
+        if (prev_sm_ok != tmp.sm_socket_ok) {
+            if (tmp.sm_socket_ok)
+                LOG_INFO(&tmp, LC_NET, "SM socket CONNECTED  %s", tmp.sm_socket_path);
+            else
+                LOG_WARN(&tmp, LC_NET, "SM socket NOT connected");
+            prev_sm_ok = tmp.sm_socket_ok;
+        }
+
+        /* Services snapshot */
+        if (tmp.service_count > 0) {
+            for (int _i = 0; _i < tmp.service_count; _i++) {
+                const service_data_t *_s = &tmp.services[_i];
+                LOG_DEBUG(&tmp, LC_SERVICE,
+                          "%-16s  PID:%-7d  CPU:%5.1f%%  RAM:%5ldMB  FDs:%-4d  Health:%3d",
+                          _s->name, _s->pid,
+                          _s->cpu_pct, _s->rss_kb/1024,
+                          _s->fd_count >= 0 ? _s->fd_count : 0,
+                          _s->health_score);
+            }
+        } else {
+            LOG_WARN(&tmp, LC_SERVICE, "No middleware services detected in /proc");
+        }
+
+        /* Memory warnings */
+        if (tmp.ram_total_kb > 0) {
+            float ram_pct = 100.0f * tmp.ram_used_kb / tmp.ram_total_kb;
+            if (ram_pct > 90.0f)
+                LOG_ERR(&tmp, LC_MEMORY, "RAM CRITICAL: %.1f%% used (%ldMB free)",
+                        ram_pct, (tmp.ram_total_kb - tmp.ram_used_kb)/1024);
+            else if (ram_pct > 80.0f)
+                LOG_WARN(&tmp, LC_MEMORY, "RAM HIGH: %.1f%% used", ram_pct);
+        }
 
         tmp.last_update = time(NULL);
 
@@ -1350,29 +1477,80 @@ static void draw_panel_alerts(WINDOW *win, const monitor_data_t *d)
     getmaxyx(win, rows, cols);
 
     wattron(win, COLOR_PAIR(CP_RED) | A_BOLD);
-    mvwprintw(win, 1, (cols - 8) / 2, " Alerts ");
+    mvwprintw(win, 1, (cols - 10) / 2, " Alerts ");
     wattroff(win, COLOR_PAIR(CP_RED) | A_BOLD);
     mvwhline(win, 2, 1, ACS_HLINE, cols - 2);
 
-    int row = 3;
+    /* Counter badge on title line */
+    if (d->alert_count > 0) {
+        wattron(win, COLOR_PAIR(CP_RED) | A_BOLD | A_BLINK);
+        mvwprintw(win, 1, cols - 14, " %d ACTIVE ", d->alert_count);
+        wattroff(win, COLOR_PAIR(CP_RED) | A_BOLD | A_BLINK);
+    } else {
+        wattron(win, COLOR_PAIR(CP_GREEN) | A_BOLD);
+        mvwprintw(win, 1, cols - 12, " ALL CLEAR ");
+        wattroff(win, COLOR_PAIR(CP_GREEN) | A_BOLD);
+    }
+
+    /* Column headers */
+    wattron(win, A_BOLD | A_UNDERLINE);
+    mvwprintw(win, 3, 2, "  #  Alert Message");
+    wattroff(win, A_BOLD | A_UNDERLINE);
+    mvwhline(win, 4, 1, ACS_HLINE, cols - 2);
+
+    int row = 5;
     if (d->alert_count == 0) {
-        wattron(win, COLOR_PAIR(CP_GREEN));
-        mvwprintw(win, row, 2, "No alerts. System operating normally.");
-        wattroff(win, COLOR_PAIR(CP_GREEN));
+        wattron(win, COLOR_PAIR(CP_GREEN) | A_BOLD);
+        mvwprintw(win, row, 4, "  No active alerts. All services operating normally.");
+        wattroff(win, COLOR_PAIR(CP_GREEN) | A_BOLD);
     } else {
         for (int i = 0; i < d->alert_count && row < rows - 2; i++) {
             wattron(win, COLOR_PAIR(CP_RED));
-            mvwprintw(win, row++, 2, "%s", d->alert_lines[i]);
+            mvwprintw(win, row, 2, " %2d ", i + 1);
             wattroff(win, COLOR_PAIR(CP_RED));
+            wattron(win, COLOR_PAIR(CP_RED) | A_BOLD);
+            mvwaddch(win, row, 6, ACS_DIAMOND);
+            mvwprintw(win, row, 8, "%-*.*s", cols - 10, cols - 10, d->alert_lines[i]);
+            wattroff(win, COLOR_PAIR(CP_RED) | A_BOLD);
+            row++;
         }
     }
-    (void)rows;
+
+    /* Footer */
+    mvwhline(win, rows - 3, 1, ACS_HLINE, cols - 2);
+    wattron(win, COLOR_PAIR(CP_DIM));
+    mvwprintw(win, rows - 2, 2, "Alerts auto-clear on next collection cycle. Total this session: %d",
+              d->alert_count);
+    wattroff(win, COLOR_PAIR(CP_DIM));
     wrefresh(win);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
  * Panel: Logs (tab 7)
  * ══════════════════════════════════════════════════════════════════════════ */
+
+/* Log level metadata */
+static const struct {
+    const char *label;   /* 5-char padded */
+    int         color;
+} LOG_LEVEL_META[] = {
+    { "DEBUG", CP_DIM    },   /* LL_DEBUG */
+    { "INFO ", CP_GREEN  },   /* LL_INFO  */
+    { "WARN ", CP_YELLOW },   /* LL_WARN  */
+    { "ERROR", CP_RED    },   /* LL_ERROR */
+};
+
+/* Log category metadata */
+static const char *LOG_CAT_LABEL[] = {
+    "SYS",  /* LC_SYSTEM   */
+    "SVC",  /* LC_SERVICE  */
+    "HAL",  /* LC_HAL      */
+    "MEM",  /* LC_MEMORY   */
+    "I/O",  /* LC_IO       */
+    "SEC",  /* LC_SECURITY */
+    "HLT",  /* LC_HEALTH   */
+    "NET",  /* LC_NET      */
+};
 
 static void draw_panel_logs(WINDOW *win, const monitor_data_t *d)
 {
@@ -1381,26 +1559,131 @@ static void draw_panel_logs(WINDOW *win, const monitor_data_t *d)
     int rows, cols;
     getmaxyx(win, rows, cols);
 
+    /* Title */
     wattron(win, COLOR_PAIR(CP_CYAN) | A_BOLD);
-    mvwprintw(win, 1, (cols - 6) / 2, " Logs ");
+    mvwprintw(win, 1, (cols - 20) / 2, " System Event Log ");
     wattroff(win, COLOR_PAIR(CP_CYAN) | A_BOLD);
+
+    /* Entry count badge */
+    wattron(win, COLOR_PAIR(CP_DIM));
+    mvwprintw(win, 1, cols - 18, " %d entries ", d->log_count);
+    wattroff(win, COLOR_PAIR(CP_DIM));
     mvwhline(win, 2, 1, ACS_HLINE, cols - 2);
 
-    int row = 3;
-    int avail = rows - 4;
-
-    /* Show most recent logs */
-    int start = (d->log_count > avail) ? d->log_count - avail : 0;
-    for (int i = start; i < d->log_count && row < rows - 1; i++) {
+    /* Level filter summary on header row */
+    int n_debug = 0, n_info = 0, n_warn = 0, n_err = 0;
+    for (int i = 0; i < d->log_count; i++) {
         int idx = (d->log_head + i) % MAX_LOG_LINES;
-        mvwprintw(win, row++, 2, "%-*.*s", cols - 4, cols - 4, d->log_lines[idx]);
+        switch (d->log_entries[idx].level) {
+        case LL_DEBUG: n_debug++; break;
+        case LL_INFO:  n_info++;  break;
+        case LL_WARN:  n_warn++;  break;
+        case LL_ERROR: n_err++;   break;
+        }
+    }
+    int hdr_col = 2;
+    mvwprintw(win, 3, hdr_col, "Filter: ");
+    hdr_col += 8;
+    wattron(win, COLOR_PAIR(CP_DIM));  mvwprintw(win, 3, hdr_col, "DBG:%-4d ", n_debug); wattroff(win, COLOR_PAIR(CP_DIM));  hdr_col += 9;
+    wattron(win, COLOR_PAIR(CP_GREEN));mvwprintw(win, 3, hdr_col, "INF:%-4d ", n_info);  wattroff(win, COLOR_PAIR(CP_GREEN)); hdr_col += 9;
+    wattron(win, COLOR_PAIR(CP_YELLOW));mvwprintw(win,3, hdr_col, "WRN:%-4d ", n_warn); wattroff(win, COLOR_PAIR(CP_YELLOW));hdr_col += 9;
+    wattron(win, COLOR_PAIR(CP_RED) | A_BOLD);mvwprintw(win,3,hdr_col,"ERR:%-4d",n_err);wattroff(win,COLOR_PAIR(CP_RED)|A_BOLD);
+
+    /* Column headers */
+    mvwhline(win, 4, 1, ACS_HLINE, cols - 2);
+    wattron(win, A_BOLD);
+    mvwprintw(win, 5, 2,  "%-8s", "Time");
+    mvwaddch(win, 5, 11, ACS_VLINE);
+    mvwprintw(win, 5, 13, "%-5s", "Level");
+    mvwaddch(win, 5, 19, ACS_VLINE);
+    mvwprintw(win, 5, 21, "%-3s", "Cat");
+    mvwaddch(win, 5, 25, ACS_VLINE);
+    mvwprintw(win, 5, 27, "Message");
+    wattroff(win, A_BOLD);
+    mvwhline(win, 6, 1, ACS_HLINE, cols - 2);
+
+    /* Log entries — show most recent, skip DEBUG entries if screen is crowded */
+    int avail_rows = rows - 9;  /* rows 7 .. rows-3 */
+    if (avail_rows < 1) { wrefresh(win); return; }
+
+    /* Collect visible entries (newest last, skip excess DEBUG) */
+    int start = (d->log_count > avail_rows) ? d->log_count - avail_rows : 0;
+    int row = 7;
+
+    for (int i = start; i < d->log_count && row < rows - 2; i++) {
+        int idx = (d->log_head + i) % MAX_LOG_LINES;
+        const log_entry_t *e = &d->log_entries[idx];
+
+        int lm_idx = (int)e->level;
+        if (lm_idx < 0 || lm_idx > 3) lm_idx = 1;
+        int cat_idx = (int)e->cat;
+        if (cat_idx < 0 || cat_idx > 7) cat_idx = 0;
+
+        int lcolor = LOG_LEVEL_META[lm_idx].color;
+        int lattr  = (e->level == LL_ERROR) ? (COLOR_PAIR(lcolor) | A_BOLD) :
+                     (e->level == LL_WARN)  ? (COLOR_PAIR(lcolor) | A_BOLD) :
+                     COLOR_PAIR(lcolor);
+
+        /* Row background: alternate faint for readability */
+        if (e->level == LL_ERROR) wattron(win, A_BOLD);
+
+        /* Timestamp HH:MM:SS */
+        struct tm *tm = localtime(&e->ts);
+        char tmbuf[10];
+        strftime(tmbuf, sizeof(tmbuf), "%H:%M:%S", tm);
+        wattron(win, COLOR_PAIR(CP_DIM));
+        mvwprintw(win, row, 2, "%8s", tmbuf);
+        wattroff(win, COLOR_PAIR(CP_DIM));
+
+        /* Separator */
+        mvwaddch(win, row, 11, ACS_VLINE);
+
+        /* Level badge */
+        wattron(win, lattr);
+        mvwprintw(win, row, 13, "%-5s", LOG_LEVEL_META[lm_idx].label);
+        wattroff(win, lattr);
+
+        /* Separator */
+        mvwaddch(win, row, 19, ACS_VLINE);
+
+        /* Category badge */
+        int cat_color = (cat_idx == (int)LC_SERVICE) ? CP_CYAN    :
+                        (cat_idx == (int)LC_HAL)     ? CP_MAGENTA :
+                        (cat_idx == (int)LC_SECURITY)? CP_RED     :
+                        (cat_idx == (int)LC_HEALTH)  ? CP_YELLOW  :
+                        (cat_idx == (int)LC_MEMORY)  ? CP_BLUE    : CP_DEFAULT;
+        wattron(win, COLOR_PAIR(cat_color) | A_BOLD);
+        mvwprintw(win, row, 21, "%-3s", LOG_CAT_LABEL[cat_idx]);
+        wattroff(win, COLOR_PAIR(cat_color) | A_BOLD);
+
+        /* Separator */
+        mvwaddch(win, row, 25, ACS_VLINE);
+
+        /* Message */
+        wattron(win, lattr);
+        int msg_w = cols - 28;
+        if (msg_w > 0)
+            mvwprintw(win, row, 27, "%-*.*s", msg_w, msg_w, e->msg);
+        wattroff(win, lattr);
+        if (e->level == LL_ERROR) wattroff(win, A_BOLD);
+
+        row++;
     }
 
     if (d->log_count == 0) {
-        mvwprintw(win, row, 2, "(No log entries yet)");
+        wattron(win, COLOR_PAIR(CP_DIM));
+        mvwprintw(win, 8, 4, "  No log entries yet. Waiting for first collection cycle...");
+        wattroff(win, COLOR_PAIR(CP_DIM));
     }
 
-    (void)cols;
+    /* Footer */
+    mvwhline(win, rows - 3, 1, ACS_HLINE, cols - 2);
+    wattron(win, COLOR_PAIR(CP_DIM));
+    mvwprintw(win, rows - 2, 2,
+              "Showing %d of %d entries  |  Ring buffer: %d/%d  |  Legend: DBG=gray  INF=green  WRN=yellow  ERR=red",
+              (d->log_count > avail_rows ? avail_rows : d->log_count),
+              d->log_count, d->log_count, MAX_LOG_LINES);
+    wattroff(win, COLOR_PAIR(CP_DIM));
     wrefresh(win);
 }
 

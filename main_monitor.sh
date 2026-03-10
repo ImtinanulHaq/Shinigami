@@ -52,9 +52,15 @@ cleanup() {
     pkill -f "camera_hal" 2>/dev/null || true
     pkill -f "sensor_hal" 2>/dev/null || true
     pkill -f "gpio_hal" 2>/dev/null || true
+    pkill -x "audio_service" 2>/dev/null || true
+    pkill -x "camera_service" 2>/dev/null || true
+    pkill -x "sensor_service" 2>/dev/null || true
+    pkill -x "gpio_service" 2>/dev/null || true
     pkill -f "middleware_monitord" 2>/dev/null || true
     pkill -f "middleware_monitor" 2>/dev/null || true
     pkill -f "middleware_monitor_tui" 2>/dev/null || true
+    # Remove mock service symlinks
+    rm -f /tmp/audio_service /tmp/camera_service /tmp/sensor_service /tmp/gpio_service 2>/dev/null || true
     
     # Clean up socket files
     rm -f /run/servicemanager.sock 2>/dev/null || true
@@ -243,16 +249,14 @@ echo -e "${BLUE}[5/6] Starting HAL services...${NC}"
 # Function to start a mock service
 start_mock_service() {
     local name=$1
-    local socket_path="/tmp/${name}.sock"
-    
-    # Create a simple background process that just sleeps
-    # In real scenario, these would be actual HAL binaries
-    (
-        while true; do
-            sleep 1
-        done
-    ) &
-    
+
+    # KEY FIX: We need /proc/[pid]/comm to equal $name so the monitor can
+    # detect it. A bash subshell has comm=bash — NOT detectable.
+    # Solution: symlink /bin/sleep to /tmp/$name and run it.
+    # The kernel sets comm from the executable basename → comm=$name ✓
+    ln -sf /bin/sleep "/tmp/${name}"
+    "/tmp/${name}" infinity &
+
     local pid=$!
     PIDS+=($pid)
     echo -e "${GREEN}[✓] $name started (PID: $pid)${NC}"
