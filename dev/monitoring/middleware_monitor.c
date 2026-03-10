@@ -101,6 +101,7 @@ typedef struct {
 typedef struct {
     /* CPU */
     float cpu_total_pct;
+    float cpu_iowait_pct;   /* shown separately in Overview */
     float cpu_core_pct[16];
     int   num_cores;
     /* Previous snapshot for delta */
@@ -189,15 +190,32 @@ static int read_cpu_stat(cpu_stat_t *s)
     return found ? 0 : -1;
 }
 
+/* Returns CPU busy % (excludes iowait — matches htop behaviour) */
 static float cpu_delta_pct(const cpu_stat_t *s1, const cpu_stat_t *s2)
 {
+    /* total includes ALL states including iowait */
     long total1 = s1->user + s1->nice + s1->sys + s1->idle + s1->iowait + s1->irq + s1->softirq + s1->steal;
     long total2 = s2->user + s2->nice + s2->sys + s2->idle + s2->iowait + s2->irq + s2->softirq + s2->steal;
-    long idle_d = s2->idle - s1->idle;
+    /* idle_d = idle only (NOT iowait) → consistent with htop %CPU */
+    long idle_d  = (s2->idle  - s1->idle);
     long total_d = total2 - total1;
     if (total_d <= 0) return 0.0f;
     float pct = (1.0f - (float)idle_d / (float)total_d) * 100.0f;
-    if (pct < 0.0f) pct = 0.0f;
+    if (pct < 0.0f)   pct = 0.0f;
+    if (pct > 100.0f) pct = 100.0f;
+    return pct;
+}
+
+/* Returns iowait % separately for diagnostics */
+static float cpu_iowait_pct(const cpu_stat_t *s1, const cpu_stat_t *s2)
+{
+    long total1 = s1->user + s1->nice + s1->sys + s1->idle + s1->iowait + s1->irq + s1->softirq + s1->steal;
+    long total2 = s2->user + s2->nice + s2->sys + s2->idle + s2->iowait + s2->irq + s2->softirq + s2->steal;
+    long iowait_d = s2->iowait - s1->iowait;
+    long total_d  = total2 - total1;
+    if (total_d <= 0) return 0.0f;
+    float pct = (float)iowait_d / (float)total_d * 100.0f;
+    if (pct < 0.0f)   pct = 0.0f;
     if (pct > 100.0f) pct = 100.0f;
     return pct;
 }
@@ -269,6 +287,20 @@ static int read_proc_cmdline(pid_t pid, char *buf, int bufsz)
     for (int i = 0; i < n; i++)
         if (buf[i] == '\0') buf[i] = ' ';
     return 0;
+}
+
+/* Read /proc/[pid]/comm — the canonical 15-char process name */
+static int read_proc_comm(pid_t pid, char *buf, int bufsz)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/comm", pid);
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    if (!fgets(buf, bufsz, f)) { fclose(f); return -1; }
+    fclose(f);
+    int len = (int)strlen(buf);
+    while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) buf[--len] = '\0';
+    return len > 0 ? 0 : -1;
 }
 
 static int read_proc_status(pid_t pid, long *vmrss_kb, long *vmsize_kb, int *threads)
@@ -407,12 +439,22 @@ static int try_sm_socket(const char *path)
  * Service discovery via /proc scan
  * ══════════════════════════════════════════════════════════════════════════ */
 
+/*
+ * Match against /proc/[pid]/comm (exact process name, up to 15 chars).
+ * This prevents false positives from processes that merely mention
+ * "sandbox" or "audio" in their argv flags (e.g. VS Code, Chrome).
+ */
 static const char *KNOWN_SERVICES[] = {
+    /* Primary middleware services */
     "servicemanager", "bankai",
-    "audio_service", "camera_service", "sensor_service", "gpio_service",
+    /* HAL services (real binary names) */
     "audio_hal", "camera_hal", "sensor_hal", "gpio_hal",
-    "hal_service", "security_manager", "sandbox",
-    "middleware_monitord", "middleware_monitor",
+    /* Service aliases used by main_monitor.sh mock launcher */
+    "audio_service", "camera_service", "sensor_service", "gpio_service",
+    /* Security stack */
+    "security_manager",
+    /* Daemon (but NOT ourselves — we exclude own PID below) */
+    "middleware_monitord",
     NULL
 };
 
@@ -441,6 +483,7 @@ static void scan_processes(monitor_data_t *d)
     if (!proc) return;
 
     d->service_count = 0;
+    pid_t our_pid = getpid();
 
     struct dirent *ent;
     while ((ent = readdir(proc)) != NULL && d->service_count < MAX_SERVICES) {
@@ -448,38 +491,71 @@ static void scan_processes(monitor_data_t *d)
         if (!isdigit((unsigned char)ent->d_name[0])) continue;
 
         pid_t pid = (pid_t)atoi(ent->d_name);
-        if (pid <= 0) continue;
+        if (pid <= 0 || pid == our_pid) continue;
 
-        char cmdline[512] = {0};
-        if (read_proc_cmdline(pid, cmdline, sizeof(cmdline)) != 0) continue;
-        if (cmdline[0] == '\0') continue;
+        /* PRIMARY: match by /proc/[pid]/comm (exact 15-char process name).
+         * This avoids false positives from argv flags like --no-zygote-sandbox. */
+        char comm[64] = {0};
+        if (read_proc_comm(pid, comm, sizeof(comm)) != 0) continue;
 
-        /* Check if this matches any known service */
-        int match = 0;
         const char *matched_name = NULL;
         for (int j = 0; KNOWN_SERVICES[j]; j++) {
-            if (strstr(cmdline, KNOWN_SERVICES[j])) {
-                match = 1;
+            /* Exact match on comm (comm is at most 15 chars, may be truncated) */
+            if (strcmp(comm, KNOWN_SERVICES[j]) == 0) {
+                matched_name = KNOWN_SERVICES[j];
+                break;
+            }
+            /* Prefix match for truncated comm (kernel truncates at 15) */
+            if (strlen(KNOWN_SERVICES[j]) > 15 &&
+                strncmp(comm, KNOWN_SERVICES[j], 15) == 0) {
                 matched_name = KNOWN_SERVICES[j];
                 break;
             }
         }
-        if (!match) continue;
 
-        /* Check process still exists */
+        /* SECONDARY: if comm is a shell (bash/sh/dash), check argv[0] basename.
+         * This covers: `exec -a service_name bash` style launches. */
+        if (!matched_name) {
+            if (strcmp(comm, "bash") == 0 || strcmp(comm, "sh") == 0 ||
+                strcmp(comm, "dash") == 0 || strcmp(comm, "python") == 0) {
+                /* Read first token of cmdline as argv[0] */
+                char cmdline[512] = {0};
+                if (read_proc_cmdline(pid, cmdline, sizeof(cmdline)) == 0) {
+                    /* argv[0] is before first space */
+                    char argv0[64] = {0};
+                    const char *sp = strchr(cmdline, ' ');
+                    size_t len = sp ? (size_t)(sp - cmdline) : strlen(cmdline);
+                    if (len > sizeof(argv0)-1) len = sizeof(argv0)-1;
+                    strncpy(argv0, cmdline, len);
+                    /* Get basename of argv[0] */
+                    const char *base = strrchr(argv0, '/');
+                    base = base ? base + 1 : argv0;
+                    for (int j = 0; KNOWN_SERVICES[j]; j++) {
+                        if (strcmp(base, KNOWN_SERVICES[j]) == 0) {
+                            matched_name = KNOWN_SERVICES[j];
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!matched_name) continue;
+
+        /* Deduplicate: skip if we already have an entry for this PID */
+        int dup = 0;
+        for (int k = 0; k < d->service_count; k++) {
+            if (d->services[k].pid == pid) { dup = 1; break; }
+        }
+        if (dup) continue;
+
+        /* Verify process still alive */
         char statpath[64];
         snprintf(statpath, sizeof(statpath), "/proc/%d/stat", pid);
         if (access(statpath, F_OK) != 0) continue;
 
         service_data_t *svc = &d->services[d->service_count];
-
-        /* Preserve previous CPU tracking state if same pid+name */
-        int found_prev = 0;
-        /* (search in old data happens before scan_processes overwrites) */
-
-        if (!found_prev) {
-            memset(svc, 0, sizeof(*svc));
-        }
+        memset(svc, 0, sizeof(*svc));
 
         strncpy(svc->name, matched_name, SERVICE_NAME_LEN - 1);
         svc->pid     = pid;
@@ -576,6 +652,7 @@ static void *data_collector_thread(void *arg)
         cpu_stat_t cpu_now;
         if (read_cpu_stat(&cpu_now) == 0) {
             tmp.cpu_total_pct  = cpu_delta_pct(&cpu_baseline, &cpu_now);
+            tmp.cpu_iowait_pct = cpu_iowait_pct(&cpu_baseline, &cpu_now);
             tmp.cpu_initialized = 1;
             cpu_baseline       = cpu_now;
         }
@@ -709,26 +786,39 @@ static void draw_bar(WINDOW *win, int y, int x, int width, float pct)
 
 static void draw_topbar(const monitor_data_t *d)
 {
-    char tb[512];
     wattron(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
     move(0, 0);
     for (int i = 0; i < g_cols; i++) addch(' ');
 
-    /* Health status */
-    float cpu = d->cpu_total_pct;
-    const char *health_str = (cpu < 60.0f && d->service_count > 0) ? "EXCELLENT" :
-                             (cpu < 85.0f) ? "GOOD" : "WARNING";
-    int health_val = (cpu < 60.0f) ? 100 : (cpu < 85.0f) ? 75 : 50;
+    /* Compute real health score from service data */
+    int health_val = 100;
+    if (d->service_count > 0) {
+        int total_score = 0;
+        for (int i = 0; i < d->service_count; i++)
+            total_score += d->services[i].health_score;
+        health_val = total_score / d->service_count;
+    } else {
+        /* No services found — neutral 70 (system running but nothing detected) */
+        health_val = 70;
+    }
+    if (d->alert_count > 0) health_val -= (d->alert_count * 5);
+    if (health_val < 0)   health_val = 0;
+    if (health_val > 100) health_val = 100;
+
+    const char *health_str = (health_val >= 90) ? "EXCELLENT" :
+                             (health_val >= 70) ? "GOOD"      :
+                             (health_val >= 50) ? "WARNING"   : "CRITICAL";
 
     time_t now = time(NULL);
     struct tm *tm_now = localtime(&now);
     char timebuf[16];
     strftime(timebuf, sizeof(timebuf), "%H:%M:%S", tm_now);
 
+    char tb[512];
     snprintf(tb, sizeof(tb),
-             " Health: %s (%d/100)  CPU: %.1f%%  RAM: %ld/%ld MB  Load: %.2f   %s",
+             " Health: %s (%d/100)  CPU: %.1f%% (io+%.1f%%)  RAM: %ld/%ld MB  Load: %.2f   %s",
              health_str, health_val,
-             cpu,
+             d->cpu_total_pct, d->cpu_iowait_pct,
              d->ram_used_kb / 1024, d->ram_total_kb / 1024,
              d->load_1,
              timebuf);
@@ -805,13 +895,14 @@ static void draw_panel_overview(WINDOW *win, const monitor_data_t *d)
 
     int row = 3;
 
-    /* CPU bar */
+    /* CPU bar (busy, does NOT include iowait — same as htop) */
     wattron(win, COLOR_PAIR(CP_CYAN));
     mvwprintw(win, row, 2, "CPU  ");
     wattroff(win, COLOR_PAIR(CP_CYAN));
     draw_bar(win, row, 7, bar_w, d->cpu_total_pct);
     wattron(win, COLOR_PAIR(pct_color(d->cpu_total_pct)));
-    mvwprintw(win, row, 7 + bar_w + 1, "%.1f%% (%d cores)", d->cpu_total_pct, d->num_cores);
+    mvwprintw(win, row, 7 + bar_w + 1, "%.1f%% busy  +%.1f%% iowait  (%d cores)",
+              d->cpu_total_pct, d->cpu_iowait_pct, d->num_cores);
     wattroff(win, COLOR_PAIR(pct_color(d->cpu_total_pct)));
     row++;
 
@@ -972,48 +1063,68 @@ static void draw_panel_hal(WINDOW *win, const monitor_data_t *d)
     getmaxyx(win, rows, cols);
 
     wattron(win, COLOR_PAIR(CP_CYAN) | A_BOLD);
-    mvwprintw(win, 1, (cols - 20) / 2, " Hardware Abstraction Layer ");
+    mvwprintw(win, 1, (cols - 28) / 2, " Hardware Abstraction Layer ");
     wattroff(win, COLOR_PAIR(CP_CYAN) | A_BOLD);
     mvwhline(win, 2, 1, ACS_HLINE, cols - 2);
 
     int row = 3;
-    const char *hal_names[] = {"audio_hal", "camera_hal", "sensor_hal", "gpio_hal", NULL};
 
-    for (int k = 0; hal_names[k] && row < rows - 2; k++) {
-        /* Find this HAL service */
+    /* Each HAL entry: display name + list of process names to search for */
+    typedef struct { const char *display; const char *names[3]; } hal_entry_t;
+    static const hal_entry_t hal_table[] = {
+        { "Audio HAL",   { "audio_hal",   "audio_service",  NULL } },
+        { "Camera HAL",  { "camera_hal",  "camera_service", NULL } },
+        { "Sensor HAL",  { "sensor_hal",  "sensor_service", NULL } },
+        { "GPIO HAL",    { "gpio_hal",    "gpio_service",   NULL } },
+        { NULL, { NULL, NULL, NULL } }
+    };
+
+    for (int k = 0; hal_table[k].display && row < rows - 2; k++) {
+        /* Search for any matching name variant */
         const service_data_t *found = NULL;
-        for (int i = 0; i < d->service_count; i++) {
-            if (strstr(d->services[i].name, hal_names[k]) ||
-                strstr(d->services[i].name, hal_names[k] + 0)) {
-                found = &d->services[i];
-                break;
+        for (int i = 0; i < d->service_count && !found; i++) {
+            for (int n = 0; hal_table[k].names[n]; n++) {
+                if (strcmp(d->services[i].name, hal_table[k].names[n]) == 0) {
+                    found = &d->services[i];
+                    break;
+                }
             }
         }
 
         wattron(win, COLOR_PAIR(CP_CYAN) | A_BOLD);
-        mvwprintw(win, row, 2, "[%s]", hal_names[k]);
+        mvwprintw(win, row, 2, "[%-10s]", hal_table[k].display);
         wattroff(win, A_BOLD);
 
         if (found && found->running) {
-            wattron(win, COLOR_PAIR(CP_GREEN));
-            mvwprintw(win, row, 20, "RUNNING (PID:%d)", found->pid);
+            wattron(win, COLOR_PAIR(CP_GREEN) | A_BOLD);
+            mvwprintw(win, row, 16, "RUNNING  PID:%-7d", found->pid);
+            wattroff(win, A_BOLD);
             wattroff(win, COLOR_PAIR(CP_GREEN));
             row++;
 
-            mvwprintw(win, row++, 4, "CPU: %.1f%%  RAM: %ldMB  FDs: %d  Threads: %d",
-                      found->cpu_pct, found->rss_kb / 1024, found->fd_count, found->thread_count);
-            draw_bar(win, row - 1, 45, 20, found->cpu_pct);
-
+            mvwprintw(win, row, 4, "CPU:");
+            draw_bar(win, row, 9, 20, found->cpu_pct);
+            wattron(win, COLOR_PAIR(pct_color(found->cpu_pct)));
+            mvwprintw(win, row, 31, "%5.1f%%", found->cpu_pct);
+            wattroff(win, COLOR_PAIR(pct_color(found->cpu_pct)));
+            mvwprintw(win, row, 39, "  RAM:%5ldMB  FDs:%-4d  Threads:%d",
+                      found->rss_kb / 1024, found->fd_count >= 0 ? found->fd_count : 0,
+                      found->thread_count);
+            row++;
         } else {
             wattron(win, COLOR_PAIR(CP_YELLOW));
-            mvwprintw(win, row, 20, "NOT RUNNING (stats unavailable - check 'sudo ./main_monitor.sh')");
+            mvwprintw(win, row, 16, "NOT RUNNING  (real binary not found - mock not detectable)");
             wattroff(win, COLOR_PAIR(CP_YELLOW));
             row++;
         }
         mvwhline(win, row++, 1, ACS_HLINE, cols - 2);
     }
 
-    mvwprintw(win, row, 2, "HAL stats socket: not connected. Showing /proc data for running HAL processes.");
+    wattron(win, COLOR_PAIR(CP_DIM));
+    mvwprintw(win, row, 2,
+              "HAL detection uses /proc/[pid]/comm exact match. "
+              "Mock services (bash loops) are not detectable.");
+    wattroff(win, COLOR_PAIR(CP_DIM));
     (void)rows;
     wrefresh(win);
 }
@@ -1444,8 +1555,8 @@ int main(int argc, char **argv)
         nanosleep(&ts, NULL);
         read_cpu_stat(&s2);
         g_data.cpu_total_pct   = cpu_delta_pct(&s1, &s2);
+        g_data.cpu_iowait_pct  = cpu_iowait_pct(&s1, &s2);
         g_data.cpu_initialized = 1;
-        /* Store s2 as prev for collector thread */
         g_data.prev_cpu = s2;
     }
 
