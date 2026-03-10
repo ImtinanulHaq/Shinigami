@@ -145,12 +145,12 @@ mw_sm_sublibrary(mw_sm_enterprise
 # mw_sm_lib — aggregate target: all SM sub-libraries in one linkable unit.
 # This is what sm_daemon and tests link against.
 # ---------------------------------------------------------------------------
-add_library(mw_sm_lib STATIC)
+add_library(mw_sm_lib INTERFACE)
 add_library(mw::sm ALIAS mw_sm_lib)
 
 # No sources of its own — it's a link aggregator
 target_link_libraries(mw_sm_lib
-    PUBLIC
+    INTERFACE
         mw_sm_infrastructure
         mw_sm_security
         mw_sm_lifecycle
@@ -158,6 +158,10 @@ target_link_libraries(mw_sm_lib
         mw_sm_enterprise
         mw::core
 )
+
+# NOTE: You must also REMOVE the set_target_properties() block below it.
+# INTERFACE libraries don't need POSITION_INDEPENDENT_CODE set on them directly, 
+# and your `mw_sm_sublibrary` macro already applies it to all the sub-libraries anyway.
 
 set_target_properties(mw_sm_lib PROPERTIES
     POSITION_INDEPENDENT_CODE ON
