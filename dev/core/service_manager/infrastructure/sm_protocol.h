@@ -80,6 +80,7 @@ typedef struct {
 /* Allowed socket path prefixes for registered services */
 #define SM_ALLOWED_PATH_1   "/run/"
 #define SM_ALLOWED_PATH_2   "/tmp/"
+#define SM_ALLOWED_PATH_3   "/dev/shm/"
 
 /* ── PAYLOAD STRUCTURES ─────────────────────────────────────────────────────── */
 

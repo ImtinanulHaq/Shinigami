@@ -3,38 +3,6 @@
 #ifdef SM_LOGGING_AVAILABLE
 #  include "sm_logging.h"
 #endif
-
-/*
- * sm_cli.c — Command-line interface + Bankai interactive terminal.
- *
- * FIX SUMMARY (over previous version):
- *   1. Protocol structs no longer duplicated — sm_protocol.h included directly.
- *      Standalone build: copy sm_protocol.h to the same directory and build with
- *      -DBANKAI_STANDALONE.  Library build: normal project include path is used.
- *   2. bankai_cmd_lookup() unified with raw_transact() — same send/recv path as
- *      every other command; no bespoke send loop.
- *   3. HMAC-zero test-mode documented with a visible runtime warning on connect.
- *   4. Tail stop race fixed: self-pipe replaces getchar().  The tail thread
- *      poll()s both the log fd and the read-end of the pipe; main writes one
- *      byte to the write-end when the user presses Enter — no buffered-input
- *      race possible.
- *   5. Command tokeniser replaced: sm_cli_tokenise() handles single-quoted,
- *      double-quoted and unquoted tokens correctly (max BANKAI_MAX_ARGS args).
- *
- * Build — standalone Bankai binary:
- *   cp ../infrastructure/sm_protocol.h .
- *   gcc -O2 -Wall -Wextra -DBANKAI_STANDALONE -o bankai sm_cli.c -lpthread
- *
- * Build — as library (linked with the daemon):
- *   gcc -O2 -Wall -Wextra -c sm_cli.c   (no BANKAI_STANDALONE, no extra main)
- */
-
-/* ── Includes ────────────────────────────────────────────────────────────────── */
-
-/*
- * FIX 1: Include sm_protocol.h instead of re-defining structs.
- * sm_cli.c lives in enterprise/ — sm_protocol.h is in infrastructure/
- */
 #include "../infrastructure/sm_protocol.h"
 #include "../security/sm_crypto.h"
 #include "sm_cli.h"

@@ -67,7 +67,7 @@ typedef struct {
 /* ── IPC context ──────────────────────────────────────────────────────── */
 
 typedef struct {
-    int               fd;                         /**< Unix socket fd, -1 closed */
+    int               fd;                         /**< Unix socket fd, -1 outside a request */
     char              service_name[SERVICE_MAX_NAME];
     char              socket_path[SERVICE_MAX_PATH]; /**< SM socket path       */
     char              verify_key_path[SERVICE_MAX_PATH];
@@ -76,6 +76,7 @@ typedef struct {
     time_t            last_heartbeat;
     int               reconnect_backoff_sec;      /**< Current backoff value    */
     int               reconnect_backoff_max;      /**< Config ceiling (s)       */
+    int               registered;                 /**< 1 after successful register */
     /* verify_context_t is embedded opaquely — allocated in service_ipc_init */
     void             *verify_ctx;                 /**< verify_context_t *       */
 } svc_ipc_t;

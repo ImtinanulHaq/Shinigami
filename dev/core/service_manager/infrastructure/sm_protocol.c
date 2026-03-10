@@ -172,7 +172,8 @@ int sm_validate_socket_path(const char* path)
 
     /* Whitelist: path must start with an allowed directory prefix */
     allowed = (strncmp(path, SM_ALLOWED_PATH_1, strlen(SM_ALLOWED_PATH_1)) == 0 ||
-               strncmp(path, SM_ALLOWED_PATH_2, strlen(SM_ALLOWED_PATH_2)) == 0);
+               strncmp(path, SM_ALLOWED_PATH_2, strlen(SM_ALLOWED_PATH_2)) == 0 ||
+               strncmp(path, SM_ALLOWED_PATH_3, strlen(SM_ALLOWED_PATH_3)) == 0);
     if (!allowed) {
         sm_log(SM_LOG_ERROR, "validate_path: not in allowed prefix: %.64s", path);
         return SM_ERR_INVALID;

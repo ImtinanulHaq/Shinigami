@@ -1,0 +1,54 @@
+[Unit]
+Description=Camera Hardware Abstraction Service
+Documentation=man:camera_service(8)
+After=network.target service_manager.service
+Requires=service_manager.service
+
+[Service]
+Type=forking
+PIDFile=/run/camera_service.pid
+ExecStart=/usr/local/bin/camera_service -c /etc/camera_service/camera_service.conf
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStop=/bin/kill -TERM $MAINPID
+
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=20
+
+User=camera
+Group=camera
+SupplementaryGroups=video render
+
+# Hardware access
+DeviceAllow=char:/dev/video0 rwm
+
+# Resource limits (frames are large; allow adequate memory)
+MemoryMax=128M
+CPUQuota=25%
+TasksMax=16
+
+# Security hardening
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_SYS_RAWIO
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=no
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ReadWritePaths=/var/log /run
+ReadOnlyPaths=/etc/camera_service
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=camera_service
+
+[Install]
+WantedBy=multi-user.target

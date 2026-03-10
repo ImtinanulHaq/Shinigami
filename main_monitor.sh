@@ -160,7 +160,17 @@ pkill -x "sensor_service" 2>/dev/null || true
 pkill -x "gpio_service" 2>/dev/null || true
 pkill -f "servicemanager" 2>/dev/null || true
 rm -f /run/servicemanager.sock /tmp/servicemanager.sock
+# Remove stale PID files so duplicate-instance check doesn't block startup
+rm -f /run/audio_service.pid /run/camera_service.pid /run/gpio_service.pid /run/sensor_service.pid
+# Pre-create PID files as world-writable so non-root services can write them
+for _svc in audio_service camera_service gpio_service sensor_service; do
+    touch "/run/${_svc}.pid" 2>/dev/null && chmod 666 "/run/${_svc}.pid" 2>/dev/null || true
+done
+# Pre-create service log files as world-writable so non-root services can append
 mkdir -p /var/log
+for _svc in audio_service camera_service gpio_service sensor_service; do
+    touch "/var/log/${_svc}.log" 2>/dev/null && chmod 666 "/var/log/${_svc}.log" 2>/dev/null || true
+done
 touch /var/log/servicemanager_audit.log 2>/dev/null || true
 chmod 666 /var/log/servicemanager_audit.log 2>/dev/null || true
 sleep 0.5
@@ -171,18 +181,38 @@ if [ -f "$SM_BIN" ]; then
     SM_PID=$!
     PIDS+=("$SM_PID")
     echo -e "${GREEN}[✓] Service Manager started (PID: $SM_PID)${NC}"
-    # Wait for socket
-    for i in $(seq 1 8); do
-        [ -S "/run/servicemanager.sock" ] || [ -S "/tmp/servicemanager.sock" ] && \
-            echo -e "${GREEN}[✓] SM socket ready${NC}" && break
-        echo -e "${CYAN}    Waiting for SM socket... ($i/8)${NC}"
+    # Wait for socket — explicit if/break to avoid || && precedence issues
+    for i in $(seq 1 10); do
+        if [ -S "/tmp/servicemanager.sock" ] || [ -S "/run/servicemanager.sock" ]; then
+            echo -e "${GREEN}[✓] SM socket ready (attempt $i)${NC}"
+            break
+        fi
+        echo -e "${CYAN}    Waiting for SM socket... ($i/10)${NC}"
         sleep 1
     done
+    # Extra 1s for SM to complete all feature initialization
+    sleep 1
+
+    # Distribute SM HMAC key to all service key paths so services can sign messages
+    SM_KEY=""
+    if   [ -f "/run/servicemanager.key" ];  then SM_KEY="/run/servicemanager.key"
+    elif [ -f "/tmp/servicemanager.key" ];  then SM_KEY="/tmp/servicemanager.key"
+    fi
+    if [ -n "$SM_KEY" ]; then
+        for svc in audio_service camera_service gpio_service sensor_service; do
+            mkdir -p "/etc/${svc}"
+            cp "$SM_KEY" "/etc/${svc}/hmac.key"
+            chmod 644 "/etc/${svc}/hmac.key"
+        done
+        echo -e "${GREEN}[✓] HMAC key distributed to all services (from $SM_KEY)${NC}"
+    else
+        echo -e "${YELLOW}[!] SM HMAC key not found — services will send unsigned messages${NC}"
+    fi
 else
     echo -e "${YELLOW}[!] servicemanager binary not found — monitor runs in stats-only mode${NC}"
 fi
 
-# Helper: start real binary or fallback to /bin/sleep mock with correct comm
+# Helper: start real binary or fall back to /bin/sleep mock (correct comm)
 start_service() {
     local name="$1"
     local bin="$2"
@@ -196,17 +226,23 @@ start_service() {
             "$bin" -f > "/tmp/${name}.log" 2>&1 &
         fi
         local pid=$!
-        PIDS+=("$pid")
-        echo -e "${GREEN}[✓] $name started (PID: $pid) [real binary]${NC}"
-    else
-        # Mock: symlink /bin/sleep so /proc/[pid]/comm = $name
-        ln -sf /bin/sleep "/tmp/${name}"
-        "/tmp/${name}" infinity &
-        local pid=$!
-        PIDS+=("$pid")
-        echo -e "${YELLOW}[~] $name started (PID: $pid) [mock — binary not found]${NC}"
+        sleep 3  # give it 3 seconds to either stabilise or crash
+        if kill -0 "$pid" 2>/dev/null; then
+            PIDS+=("$pid")
+            echo -e "${GREEN}[✓] $name running (PID: $pid) [real binary]${NC}"
+            return
+        else
+            echo -e "${YELLOW}[!] $name real binary exited early — check /var/log/${name}.log${NC}"
+            echo -e "${YELLOW}    Falling back to mock process${NC}"
+        fi
     fi
-    sleep 0.3
+
+    # Mock: symlink /bin/sleep so /proc/[pid]/comm matches the service name
+    ln -sf /bin/sleep "/tmp/${name}"
+    "/tmp/${name}" infinity &
+    local pid=$!
+    PIDS+=("$pid")
+    echo -e "${YELLOW}[~] $name started (PID: $pid) [mock — real binary not running]${NC}"
 }
 
 start_service "audio_service"  "$AUDIO_BIN"

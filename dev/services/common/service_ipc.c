@@ -2,12 +2,15 @@
  * @file service_ipc.c
  * @brief Service Manager IPC implementation.
  *
- * Wraps the sm_protocol.h wire format with verify_sign_message() /
- * verify_check_message() from the Verify module so every outgoing frame
- * is signed and every incoming frame is authenticated before processing.
+ * SM uses a per-request connection model: it accepts one message, sends
+ * a reply, then closes the client FD.  Each call to service_ipc_register()
+ * or service_ipc_heartbeat() therefore opens a fresh connection, sends the
+ * message, reads the reply from SM, and closes the socket before returning.
  *
- * Registration payload extends sm_register_req_t with exe-path and version
- * so the SM has full provenance information.
+ * ipc->fd is set to the SM socket FD only during an active request; it is
+ * always -1 between requests.  The event loop must NOT add ipc->fd to an
+ * io_uring/epoll watch for persistent SM data — SM never sends unsolicited
+ * data; all communication is client-initiated.
  */
 
 #define _GNU_SOURCE
@@ -30,14 +33,13 @@
 /* Pull in Verify module */
 #include "../../dev/security/verify/verify.h"
 
-/* ── extended registration payload ───────────────────────────────────── */
+/* ── registration payload — must match sm_register_req_t (580 bytes) ─── */
 
 typedef struct {
-    char     service_name[SM_MAX_NAME];
-    char     socket_path[SM_MAX_PATH];
-    char     exe_path[SM_MAX_PATH];
-    char     version[SERVICE_MAX_VERSION];
-    int32_t  pid;
+    char     service_name[SM_MAX_NAME];   /* 64 bytes */
+    char     socket_path[SM_MAX_PATH];    /* 256 bytes */
+    char     ring_name[SM_MAX_PATH];      /* 256 bytes — shared-memory ring name */
+    int32_t  pid;                         /* 4 bytes   = 580 total */
 } svc_register_payload_t;
 
 /* ── helpers ──────────────────────────────────────────────────────────── */
@@ -70,8 +72,11 @@ static void fill_header(sm_hdr_t *hdr, uint16_t type, uint32_t payload_len,
 }
 
 /**
- * Sign the header+payload using the Verify module.
- * The HMAC covers bytes 0..SM_HDR_HMAC_OFFSET-1 of the header + full payload.
+ * Sign the header+payload using HMAC-SHA256.
+ * The HMAC covers exactly bytes 0..SM_HDR_HMAC_OFFSET-1 of the header
+ * followed by the full payload — matching sm_validate_header_hmac() in SM.
+ * We call verify_hmac_sha256() directly so the input is identical to what
+ * SM verifies (no timestamp/nonce/sequence prepend from verify_sign_message).
  */
 static int sign_message(svc_ipc_t *ipc, sm_hdr_t *hdr,
                         const void *payload, uint32_t payload_len)
@@ -84,16 +89,17 @@ static int sign_message(svc_ipc_t *ipc, sm_hdr_t *hdr,
     size_t blob_len = SM_HDR_HMAC_OFFSET + payload_len;
     uint8_t *blob = malloc(blob_len);
     if (!blob) return -1;
-    memcpy(blob,                    hdr,     SM_HDR_HMAC_OFFSET);
+    memcpy(blob,                       hdr,     SM_HDR_HMAC_OFFSET);
     if (payload && payload_len > 0)
         memcpy(blob + SM_HDR_HMAC_OFFSET, payload, payload_len);
 
-    message_auth_t auth;
-    int rc = verify_sign_message(vctx, blob, blob_len, &auth);
+    uint8_t hmac_out[32];
+    int rc = verify_hmac_sha256(vctx->master_key, vctx->master_key_len,
+                                blob, blob_len, hmac_out);
     free(blob);
     if (rc != 0) return -1;
 
-    memcpy(hdr->hmac, auth.hmac, 32);
+    memcpy(hdr->hmac, hmac_out, 32);
     return 0;
 }
 
@@ -141,52 +147,43 @@ static int recv_exact(int fd, void *buf, size_t len)
 }
 
 /**
- * Read a full SM reply (header + sm_reply_t payload).
- * Optionally verify HMAC and check response_code.
+ * Read a raw SM reply.
+ * SM sends ONLY sm_reply_t (4 bytes = int32_t response_code) without any
+ * sm_hdr_t wrapper.  No HMAC is applied to replies.
  */
-static int recv_reply(svc_ipc_t *ipc, int32_t *code_out)
+static int recv_reply_fd(int fd, int32_t *code_out)
 {
-    sm_hdr_t hdr;
-    if (recv_exact(ipc->fd, &hdr, sizeof(hdr)) < 0) return SVC_ERR_IPC;
-
-    if (hdr.magic != SM_PROTOCOL_MAGIC) {
-        LOG_ERR("SM reply: bad magic 0x%08X", hdr.magic);
-        return SVC_ERR_IPC;
-    }
-
-    /* Read payload if present */
-    uint8_t payload[SM_MAX_PAYLOAD_SIZE] = {0};
-    if (hdr.length > 0 && hdr.length <= SM_MAX_PAYLOAD_SIZE) {
-        if (recv_exact(ipc->fd, payload, hdr.length) < 0)
-            return SVC_ERR_IPC;
-    }
-
-    /* Verify signature if we have a key */
-    if (ipc->verify_ctx && hdr.length > 0) {
-        verify_context_t *vctx = (verify_context_t *)ipc->verify_ctx;
-        size_t blob_len = SM_HDR_HMAC_OFFSET + hdr.length;
-        uint8_t *blob = malloc(blob_len);
-        if (blob) {
-            memcpy(blob, &hdr, SM_HDR_HMAC_OFFSET);
-            memcpy(blob + SM_HDR_HMAC_OFFSET, payload, hdr.length);
-            message_auth_t auth;
-            memcpy(auth.hmac, hdr.hmac, 32);
-            auth.timestamp = hdr.timestamp;
-            auth.nonce     = hdr.nonce;
-            if (verify_check_message(vctx, blob, blob_len, &auth) != 0) {
-                LOG_WARN("SM reply: HMAC verification failed");
-                free(blob);
-                return SVC_ERR_IPC;
-            }
-            free(blob);
-        }
-    }
-
-    if (code_out && hdr.length >= sizeof(sm_reply_t)) {
-        sm_reply_t *rep = (sm_reply_t *)payload;
-        *code_out = rep->response_code;
-    }
+    sm_reply_t reply;
+    if (recv_exact(fd, &reply, sizeof(reply)) < 0) return SVC_ERR_IPC;
+    if (code_out) *code_out = reply.response_code;
     return SVC_OK;
+}
+
+/**
+ * Open a fresh connection to SM and return the fd (or -1 on error).
+ * SM uses per-request connections: each request gets its own FD.
+ */
+static int open_sm_connection(svc_ipc_t *ipc)
+{
+    int s = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (s < 0) {
+        LOG_ERR("open_sm_connection: socket: %s", strerror(errno));
+        return -1;
+    }
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, ipc->socket_path, sizeof(addr.sun_path) - 1);
+    addr.sun_path[sizeof(addr.sun_path) - 1] = '\0';
+
+    if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        LOG_ERR("open_sm_connection: connect(%s): %s",
+                ipc->socket_path, strerror(errno));
+        close(s);
+        return -1;
+    }
+    return s;
 }
 
 /* ── public API ───────────────────────────────────────────────────────── */
@@ -223,58 +220,53 @@ int service_ipc_init(svc_ipc_t *ipc, const char *service_name,
 int service_ipc_connect(svc_ipc_t *ipc)
 {
     if (!ipc) return SVC_ERR_INVALID;
-    if (ipc->fd >= 0) return SVC_OK; /* already connected */
-
-    int s = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (s < 0) {
-        LOG_ERR("socket: %s", strerror(errno));
-        return SVC_ERR_IPC;
-    }
-
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, ipc->socket_path, sizeof(addr.sun_path) - 1);
-
-    if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        LOG_ERR("connect(%s): %s", ipc->socket_path, strerror(errno));
-        close(s);
-        return SVC_ERR_IPC;
-    }
-
-    ipc->fd = s;
-    ipc->reconnect_backoff_sec = 1; /* reset on successful connect */
+    /* In the per-request model, ipc->fd is only valid during a request.
+     * service_ipc_connect() is kept for API compat but is a no-op here;
+     * each API call opens its own connection. */
     return SVC_OK;
 }
 
 int service_ipc_register(svc_ipc_t *ipc, const char *exe_path,
                          const char *version, pid_t pid)
 {
-    if (!ipc || ipc->fd < 0) return SVC_ERR_IPC;
+    (void)exe_path; (void)version; /* unused in per-request model */
+
+    if (!ipc) return SVC_ERR_IPC;
+
+    int fd = open_sm_connection(ipc);
+    if (fd < 0) return SVC_ERR_IPC;
 
     svc_register_payload_t req;
     memset(&req, 0, sizeof(req));
     strncpy(req.service_name, ipc->service_name, SM_MAX_NAME - 1);
     snprintf(req.socket_path, SM_MAX_PATH, "/run/%s.sock", ipc->service_name);
-    if (exe_path)  strncpy(req.exe_path, exe_path, SM_MAX_PATH - 1);
-    if (version)   strncpy(req.version, version, SERVICE_MAX_VERSION - 1);
+    snprintf(req.ring_name, SM_MAX_PATH, "/dev/shm/%s_ring", ipc->service_name);
     req.pid = (int32_t)pid;
 
     sm_hdr_t hdr;
     fill_header(&hdr, SVC_MSG_REGISTER, (uint32_t)sizeof(req), pid,
                 &ipc->last_nonce);
+    /* Temporarily set ipc->fd for sign_message */
+    ipc->fd = fd;
     if (sign_message(ipc, &hdr, &req, sizeof(req)) != 0) {
         LOG_ERR("register: sign_message failed");
+        close(fd); ipc->fd = -1;
         return SVC_ERR_IPC;
     }
 
-    if (send_frame(ipc->fd, &hdr, &req, sizeof(req)) != 0) {
+    if (send_frame(fd, &hdr, &req, sizeof(req)) != 0) {
         LOG_ERR("register: send_frame failed: %s", strerror(errno));
+        close(fd); ipc->fd = -1;
         return SVC_ERR_IPC;
     }
 
     int32_t code = 0;
-    int rc = recv_reply(ipc, &code);
+    int rc = recv_reply_fd(fd, &code);
+
+    /* Close after receiving the reply — SM closes its end too */
+    close(fd);
+    ipc->fd = -1;
+
     if (rc != SVC_OK) return rc;
 
     if (code != SM_OK) {
@@ -282,16 +274,18 @@ int service_ipc_register(svc_ipc_t *ipc, const char *exe_path,
         return SVC_ERR_IPC;
     }
 
-    LOG_INFO("registered with SM (exe=%s, ver=%s, pid=%d)",
-             exe_path ? exe_path : "(unknown)",
-             version  ? version  : "(unknown)",
-             (int)pid);
+    LOG_INFO("registered with SM (ring=/dev/shm/%s_ring, pid=%d)",
+             ipc->service_name, (int)pid);
+    ipc->registered = 1;
     return SVC_OK;
 }
 
 int service_ipc_heartbeat(svc_ipc_t *ipc)
 {
-    if (!ipc || ipc->fd < 0) return SVC_ERR_IPC;
+    if (!ipc) return SVC_ERR_IPC;
+
+    int fd = open_sm_connection(ipc);
+    if (fd < 0) return SVC_ERR_IPC;
 
     sm_heartbeat_req_t req;
     memset(&req, 0, sizeof(req));
@@ -300,44 +294,41 @@ int service_ipc_heartbeat(svc_ipc_t *ipc)
     sm_hdr_t hdr;
     fill_header(&hdr, SVC_MSG_HEARTBEAT, (uint32_t)sizeof(req),
                 getpid(), &ipc->last_nonce);
+    ipc->fd = fd;   /* for sign_message */
     sign_message(ipc, &hdr, &req, sizeof(req));
 
-    if (send_frame(ipc->fd, &hdr, &req, sizeof(req)) != 0)
-        return SVC_ERR_IPC;
+    int rc = SVC_OK;
+    if (send_frame(fd, &hdr, &req, sizeof(req)) != 0) {
+        rc = SVC_ERR_IPC;
+    } else {
+        int32_t code = 0;
+        rc = recv_reply_fd(fd, &code);
+        if (rc == SVC_OK && code != SM_OK) {
+            LOG_WARN("heartbeat: SM returned %d", code);
+            rc = SVC_ERR_IPC;
+        }
+    }
 
-    int32_t code = 0;
-    int rc = recv_reply(ipc, &code);
-    if (rc == SVC_OK && code != SM_OK) return SVC_ERR_IPC;
+    close(fd);
+    ipc->fd = -1;
 
-    ipc->last_heartbeat = time(NULL);
+    if (rc == SVC_OK)
+        ipc->last_heartbeat = time(NULL);
     return rc;
 }
 
 int service_ipc_ping(svc_ipc_t *ipc)
 {
-    if (!ipc || ipc->fd < 0) return SVC_ERR_IPC;
-
-    /* A ping is a lightweight heartbeat; re-use the heartbeat path */
-    sm_heartbeat_req_t req;
-    memset(&req, 0, sizeof(req));
-    strncpy(req.service_name, ipc->service_name, SM_MAX_NAME - 1);
-
-    sm_hdr_t hdr;
-    fill_header(&hdr, SVC_MSG_PING, (uint32_t)sizeof(req),
-                getpid(), &ipc->last_nonce);
-    sign_message(ipc, &hdr, &req, sizeof(req));
-
-    if (send_frame(ipc->fd, &hdr, &req, sizeof(req)) != 0)
-        return SVC_ERR_TIMEOUT;
-
-    int32_t code = 0;
-    int rc = recv_reply(ipc, &code);
-    return (rc == SVC_OK && code == SM_OK) ? SVC_OK : SVC_ERR_TIMEOUT;
+    /* SM doesn't know SM_MSG_PING (type=9).  Use heartbeat instead. */
+    return service_ipc_heartbeat(ipc);
 }
 
 int service_ipc_unregister(svc_ipc_t *ipc)
 {
-    if (!ipc || ipc->fd < 0) return SVC_OK;
+    if (!ipc) return SVC_OK;
+
+    int fd = open_sm_connection(ipc);
+    if (fd < 0) return SVC_OK; /* best-effort */
 
     sm_unregister_req_t req;
     memset(&req, 0, sizeof(req));
@@ -346,11 +337,15 @@ int service_ipc_unregister(svc_ipc_t *ipc)
     sm_hdr_t hdr;
     fill_header(&hdr, SVC_MSG_UNREGISTER, (uint32_t)sizeof(req),
                 getpid(), &ipc->last_nonce);
+    ipc->fd = fd;
     sign_message(ipc, &hdr, &req, sizeof(req));
-
-    send_frame(ipc->fd, &hdr, &req, sizeof(req));
+    send_frame(fd, &hdr, &req, sizeof(req));
     /* Best-effort: don't check reply — we're shutting down */
-    recv_reply(ipc, NULL);
+    int32_t code = 0;
+    recv_reply_fd(fd, &code);
+    close(fd);
+    ipc->fd   = -1;
+    ipc->registered = 0;
     return SVC_OK;
 }
 
@@ -370,17 +365,15 @@ void service_ipc_disconnect(svc_ipc_t *ipc)
 
 int service_ipc_send_health(svc_ipc_t *ipc, const svc_health_status_t *st)
 {
-    if (!ipc || ipc->fd < 0 || !st) return SVC_ERR_INVALID;
-
-    sm_hdr_t hdr;
-    fill_header(&hdr, SVC_MSG_HEALTH_OK, (uint32_t)sizeof(*st),
-                getpid(), &ipc->last_nonce);
-    sign_message(ipc, &hdr, st, sizeof(*st));
-    return send_frame(ipc->fd, &hdr, st, sizeof(*st)) == 0
-           ? SVC_OK : SVC_ERR_IPC;
+    /* SM is per-request; it does not send SVC_MSG_HEALTH_CHECK probes.
+     * This function is kept for API compatibility but does nothing. */
+    (void)ipc; (void)st;
+    return SVC_OK;
 }
 
 int service_ipc_is_connected(const svc_ipc_t *ipc)
 {
-    return ipc && ipc->fd >= 0;
+    /* In per-request model, "connected" means "registered" */
+    return ipc && ipc->registered;
 }
+
