@@ -123,8 +123,11 @@ mw_sec_sublibrary(mw_sec_verify "verify"
     LINK_LIBS
         OpenSSL::Crypto
         mw::core
+	mw::sm
 )
 add_library(mw::sec_verify ALIAS mw_sec_verify)
+
+target_include_directories(mw_sec_verify PRIVATE ${CMAKE_SOURCE_DIR}/dev/core/service_manager/security)
 
 if(NOT MW_SECURITY_VERIFY)
     target_compile_definitions(mw_sec_verify

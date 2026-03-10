@@ -66,23 +66,24 @@ mw_sm_sublibrary(mw_sm_infrastructure
         infrastructure/sm_request_id.c
     LINK_LIBS
         mw::core
+        mw_sm_security                    # <--- Added to fix ratelimit linker dependency
         OpenSSL::Crypto
         Threads::Threads
 )
 
 # ---------------------------------------------------------------------------
-# 2. SM Security — crypto, rate limiting, HMAC key management
+# 2. Security — crypto, rate limiting, token validation
 # ---------------------------------------------------------------------------
 mw_sm_sublibrary(mw_sm_security
     SOURCES
+        security/sm_security.c
+        security/sm_advanced_ratelimit.c
         security/sm_crypto.c
         security/sm_rate_limit.c
-        security/sm_advanced_ratelimit.c
-        security/sm_security.c
     LINK_LIBS
         mw::core
+        mw_sm_observability         # <--- ADD THIS LINE
         OpenSSL::Crypto
-        mw_sm_infrastructure
 )
 
 # ---------------------------------------------------------------------------
@@ -119,7 +120,7 @@ mw_sm_sublibrary(mw_sm_observability
 
 # ---------------------------------------------------------------------------
 # 5. Enterprise — threadpool, TLS, watchdog, rolling restart, plugin, eventbus,
-#                 discovery, container, CLI, main integration
+#                 discovery, container, CLI, main integration, monitoring
 # ---------------------------------------------------------------------------
 mw_sm_sublibrary(mw_sm_enterprise
     SOURCES
@@ -133,6 +134,7 @@ mw_sm_sublibrary(mw_sm_enterprise
         enterprise/sm_container.c
         enterprise/sm_cli.c
         enterprise/sm_main_integration.c
+        enterprise/sm_monitoring.c        # <--- Added to fix missing monitoring symbols
     LINK_LIBS
         mw_sm_lifecycle
         mw_sm_observability

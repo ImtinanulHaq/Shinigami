@@ -190,6 +190,7 @@ target_sources(mw_proxy_c PRIVATE bindings/c_api/proxy_c_api.cpp)
 target_include_directories(mw_proxy_c
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/bindings/c_api>
+	$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/dev>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/mw/proxy>
 )
 

@@ -18,11 +18,16 @@
 # HAL interface — header-only, no sources
 # Every HAL consumer links only this to get hal_interface.h
 # ---------------------------------------------------------------------------
-add_library(mw_hal_iface INTERFACE)
+# ---------------------------------------------------------------------------
+# HAL interface — common registry / lifecycle helpers
+# ---------------------------------------------------------------------------
+add_library(mw_hal_iface STATIC)           # <--- CHANGE TO STATIC
 add_library(mw::hal_iface ALIAS mw_hal_iface)
 
 target_sources(mw_hal_iface
-    INTERFACE
+    PRIVATE                                # <--- ADD THIS BLOCK
+        interface/hal_interface.c          # <--- ADD THIS LINE
+    PUBLIC                                 # <--- CHANGE TO PUBLIC (was INTERFACE)
         FILE_SET HEADERS
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/interface"
         FILES
@@ -30,17 +35,19 @@ target_sources(mw_hal_iface
 )
 
 target_include_directories(mw_hal_iface
-    INTERFACE
+    PUBLIC                                 # <--- CHANGE TO PUBLIC (was INTERFACE)
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/interface>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/mw/hal>
 )
 
 target_link_libraries(mw_hal_iface
-    INTERFACE
+    PUBLIC                                 # <--- CHANGE TO PUBLIC (was INTERFACE)
         mw::compile_opts
         mw::version
         Threads::Threads
 )
+
+set_target_properties(mw_hal_iface PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ---------------------------------------------------------------------------
 # Helper macro — avoids repeating the same boilerplate for each HAL layer
@@ -112,35 +119,27 @@ if(MW_HAL_SENSORS)
 endif()
 
 # ---------------------------------------------------------------------------
-# mw_hal — aggregate target.  Links all enabled layers.
+# mw_hal — aggregate target.
+# Links all enabled layers.
 # Consumers link mw::hal and get everything that's compiled in.
 # ---------------------------------------------------------------------------
-add_library(mw_hal STATIC)
+add_library(mw_hal INTERFACE)               # <--- CHANGE TO INTERFACE
 add_library(mw::hal ALIAS mw_hal)
 
-# hal_interface.c — the common registry / lifecycle helpers
-target_sources(mw_hal
-    PRIVATE interface/hal_interface.c
-)
-
 target_include_directories(mw_hal
-    PUBLIC
+    INTERFACE                               # <--- CHANGE TO INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/interface>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/mw/hal>
 )
 
 target_link_libraries(mw_hal
-    PUBLIC
+    INTERFACE                               # <--- CHANGE TO INTERFACE
         mw::hal_iface
         mw::core
         $<$<BOOL:${MW_HAL_AUDIO}>:   mw::hal_audio>
         $<$<BOOL:${MW_HAL_CAMERA}>:  mw::hal_camera>
         $<$<BOOL:${MW_HAL_GPIO}>:    mw::hal_gpio>
         $<$<BOOL:${MW_HAL_SENSORS}>: mw::hal_sensors>
-)
-
-set_target_properties(mw_hal PROPERTIES
-    POSITION_INDEPENDENT_CODE ON
 )
 
 # ---------------------------------------------------------------------------
