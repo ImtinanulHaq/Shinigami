@@ -18,10 +18,22 @@ include(CheckTypeSize)
 check_include_file("liburing.h"          HAVE_LIBURING_H)
 check_include_file("linux/io_uring.h"    HAVE_LINUX_IO_URING_H)
 
-# Minimum kernel ABI checks for io_uring operations we use
-check_symbol_exists(io_uring_queue_init   "liburing.h"  HAVE_IO_URING_QUEUE_INIT)
-check_symbol_exists(io_uring_prep_read    "liburing.h"  HAVE_IO_URING_PREP_READ)
-check_symbol_exists(io_uring_prep_poll_add "liburing.h" HAVE_IO_URING_PREP_POLL_ADD)
+# find_library gives us the actual .so path — more reliable than pkg-config
+# flag strings for CMAKE_REQUIRED_LIBRARIES.
+find_library(_liburing_path NAMES uring
+    HINTS ${PC_LIBURING_LIBRARY_DIRS} /usr/lib /usr/lib64
+          /usr/lib/${CMAKE_SYSTEM_PROCESSOR}-linux-gnu)
+if(NOT _liburing_path)
+    message(FATAL_ERROR "[MW] liburing library (.so/.a) not found on disk.\n"
+        "     Install: apt-get install liburing-dev  /  pacman -S liburing")
+endif()
+set(CMAKE_REQUIRED_LIBRARIES "${_liburing_path}")
+set(CMAKE_REQUIRED_INCLUDES  "${PC_LIBURING_INCLUDE_DIRS}")
+check_symbol_exists(io_uring_queue_init    "liburing.h"  HAVE_IO_URING_QUEUE_INIT)
+check_symbol_exists(io_uring_prep_read     "liburing.h"  HAVE_IO_URING_PREP_READ)
+check_symbol_exists(io_uring_prep_poll_add "liburing.h"  HAVE_IO_URING_PREP_POLL_ADD)
+unset(CMAKE_REQUIRED_LIBRARIES)
+unset(CMAKE_REQUIRED_INCLUDES)
 
 if(NOT HAVE_LIBURING_H OR NOT HAVE_IO_URING_QUEUE_INIT)
     message(FATAL_ERROR
@@ -34,6 +46,9 @@ endif()
 # ---------------------------------------------------------------------------
 # POSIX / glibc probes
 # ---------------------------------------------------------------------------
+# These are all GNU extensions hidden behind _GNU_SOURCE in the headers.
+# Without this, check_symbol_exists won't see them even on a fully capable system.
+set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE)
 check_symbol_exists(getrandom       "sys/random.h"  HAVE_GETRANDOM)
 check_symbol_exists(memfd_create    "sys/mman.h"    HAVE_MEMFD_CREATE)
 check_symbol_exists(accept4         "sys/socket.h"  HAVE_ACCEPT4)
@@ -62,6 +77,7 @@ endif()
 # SO_PEERCRED — used by SM for kernel-verified PID auth
 # ---------------------------------------------------------------------------
 check_struct_has_member("struct ucred" "pid" "sys/socket.h" HAVE_UCRED_STRUCT)
+unset(CMAKE_REQUIRED_DEFINITIONS)
 if(NOT HAVE_UCRED_STRUCT)
     message(FATAL_ERROR
         "[MW] struct ucred / SO_PEERCRED not available.\n"

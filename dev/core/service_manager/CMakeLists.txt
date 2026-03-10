@@ -93,7 +93,6 @@ mw_sm_sublibrary(mw_sm_lifecycle
         lifecycle/sm_config.c
         lifecycle/sm_dependencies.c
         lifecycle/sm_graceful_shutdown.c
-        lifecycle/sm_main.c
         lifecycle/sm_management.c
         lifecycle/sm_persistence.c
         lifecycle/sm_service_tier.c

@@ -144,11 +144,31 @@ include(cmake/PlatformChecks.cmake)
 find_package(Threads REQUIRED)
 
 # OpenSSL — HMAC-SHA256 for SM protocol and proxy auth
-find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
+find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto SSL)
 add_feature_info("OpenSSL" TRUE "Version: ${OPENSSL_VERSION}")
 
 # liburing — io_uring async I/O (Linux 5.1+)
-find_package(LibUring 2.3 REQUIRED)
+# Use pkg-config directly — more reliable than a custom finder across distros.
+# pkg-config finds liburing 2.14 correctly on Arch/Ubuntu/Fedora.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PC_LIBURING REQUIRED liburing)
+# Manually set the variables our PlatformChecks and subdirs expect
+set(LibUring_VERSION      "${PC_LIBURING_VERSION}")
+set(LibUring_INCLUDE_DIRS "${PC_LIBURING_INCLUDE_DIRS}")
+set(LibUring_LIBRARIES    "${PC_LIBURING_LINK_LIBRARIES}")
+if(NOT LibUring_LIBRARIES)
+    # Fallback: pkg_check_modules LDFLAGS path
+    set(LibUring_LIBRARIES "${PC_LIBURING_LDFLAGS}")
+endif()
+# Create the imported target that subdirectories link against
+if(NOT TARGET LibUring::LibUring)
+    add_library(LibUring::LibUring INTERFACE IMPORTED)
+    set_target_properties(LibUring::LibUring PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${PC_LIBURING_INCLUDE_DIRS}"
+        INTERFACE_LINK_LIBRARIES      "${PC_LIBURING_LINK_LIBRARIES}"
+        INTERFACE_COMPILE_OPTIONS     "${PC_LIBURING_CFLAGS_OTHER}"
+    )
+endif()
 add_feature_info("liburing" TRUE "Version: ${LibUring_VERSION}")
 
 # ALSA — audio HAL
