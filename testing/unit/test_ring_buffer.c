@@ -37,7 +37,7 @@ TEST_GROUP(RingBuffer);
 TEST_SETUP(RingBuffer)
 {
     tu_tmp_shm_name(g_name, sizeof(g_name), "rb_unit");
-    g_rb = ring_buffer_create(g_name, RB_CREATE_CAP, ISIZE);
+    g_rb = ring_buffer_create(g_name, CAP, ISIZE);
     TEST_ASSERT_NOT_NULL_MESSAGE(g_rb, "ring_buffer_create returned NULL");
 }
 
@@ -59,6 +59,8 @@ TEST(RingBuffer, CreateWithValidParams_ReturnsNonNull)
 
 TEST(RingBuffer, CapacityMatchesRequested)
 {
+    /* Ring buffer is created with RB_CREATE_CAP = CAP+1;
+     * the internal capacity field stores the allocated ring size. */
     TEST_ASSERT_EQUAL_UINT32(RB_CREATE_CAP, g_rb->rb->capacity);
 }
 
@@ -251,9 +253,6 @@ TEST(RingBuffer, WrapAroundBoundary_DataCorrect)
 typedef struct { int seq; int thread_id; uint8_t pad[ISIZE - 8]; } seq_item_t;
 _Static_assert(sizeof(seq_item_t) == ISIZE, "seq_item_t size mismatch");
 
-/* Mutex to serialise concurrent writes — ring_buffer_write is SPMC, not MPMC */
-static pthread_mutex_t g_write_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 typedef struct {
     rb_handle_t *rb;
     int          thread_id;
@@ -262,7 +261,7 @@ typedef struct {
 } producer_arg_t;
 
 typedef struct {
-    rb_handle_t  *rb;
+    rb_handle_t *rb;
     _Atomic long  received;
     _Atomic int   running;
     tu_barrier_t *barrier;
@@ -278,14 +277,8 @@ static void *producer_thread(void *arg)
         memset(&item, 0, sizeof(item));
         item.seq       = i;
         item.thread_id = a->thread_id;
-        /* ring_buffer_write is SPMC — serialise concurrent producers with mutex */
-        pthread_mutex_lock(&g_write_mutex);
-        while (ring_buffer_write(a->rb, &item) == RB_ERROR_FULL) {
-            pthread_mutex_unlock(&g_write_mutex);
-            tu_sleep_ms(0);   /* yield CPU while full */
-            pthread_mutex_lock(&g_write_mutex);
-        }
-        pthread_mutex_unlock(&g_write_mutex);
+        while (ring_buffer_write(a->rb, &item) == RB_ERROR_FULL)
+            tu_sleep_ms(0);   /* yield CPU */
     }
     return NULL;
 }
@@ -321,7 +314,7 @@ TEST(RingBuffer, Concurrent_1Producer1Consumer_100k_Items)
     consumer_arg_t cons;
     memset(&cons, 0, sizeof(cons));
     cons.rb = rb;
-    atomic_store(&cons.running, 1);
+    cons.running = 1;
     cons.barrier = &barrier;
     atomic_init(&cons.received, 0);
 
@@ -330,7 +323,7 @@ TEST(RingBuffer, Concurrent_1Producer1Consumer_100k_Items)
     pthread_create(&pt, NULL, producer_thread, &prod);
 
     pthread_join(pt, NULL);
-    atomic_store(&cons.running, 0);
+    cons.running = 0;
     pthread_join(ct, NULL);
 
     tu_barrier_destroy(&barrier);
@@ -364,14 +357,13 @@ TEST(RingBuffer, Concurrent_4Producers1Consumer_100k_Items)
 
     consumer_arg_t cons;
     memset(&cons, 0, sizeof(cons));
-    cons.rb = rb; atomic_store(&cons.running, 1); cons.barrier = &barrier;
+    cons.rb = rb; cons.running = 1; cons.barrier = &barrier;
     atomic_init(&cons.received, 0);
     pthread_t ct;
     pthread_create(&ct, NULL, consumer_thread, &cons);
 
     for (int i = 0; i < PROD_THREADS; i++) pthread_join(pt[i], NULL);
-    while (ring_buffer_count(rb) > 0) tu_sleep_ms(1); /* drain before stop */
-    atomic_store(&cons.running, 0);
+    cons.running = 0;
     pthread_join(ct, NULL);
 
     tu_barrier_destroy(&barrier);

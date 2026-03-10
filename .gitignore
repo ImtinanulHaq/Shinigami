@@ -48,6 +48,12 @@ build/
 *.pid        # PID files written to /run at daemon start
 *.sock       # Unix domain socket files
 *.log        # log files written by daemons
+*.a
+*.c.o
+*.cmake
+*.c.o.d
+*.txt
+*.make
 
 # ── IDE / editor noise ────────────────────────────────────────
 .vscode/

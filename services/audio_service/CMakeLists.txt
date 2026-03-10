@@ -21,10 +21,10 @@ target_include_directories(audio_service PRIVATE
     ${CMAKE_SOURCE_DIR}/../dev/security/core
 )
 
-# Link order: HAL → security → service-common → crypto → pthreads
+# Link order: HAL → memory pool → security → service-common → crypto → pthreads
 target_link_libraries(audio_service PRIVATE
-    hal_audio_lib hal_interface_lib verify_lib sm_crypto_lib ring_buffer_lib security_manager_lib
-    io_uring_loop_lib memory_pool_lib
+    hal_audio_lib hal_interface_lib verify_lib
+    memory_pool_lib ring_buffer_lib
     service_common
     ssl crypto pthread
 )
