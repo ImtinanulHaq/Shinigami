@@ -2,7 +2,7 @@ CC       := gcc
 CFLAGS   := -Wall -Wextra -Wformat -Wformat-security \
             -O2 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE \
             -fstack-protector-strong -D_FORTIFY_SOURCE=2 \
-            -fPIE -fno-strict-aliasing \
+            -fPIC -fno-strict-aliasing \
             -I./dev/core \
             -I./dev/core/service_manager \
             -I./dev/core/service_manager/enterprise \
@@ -16,7 +16,12 @@ CFLAGS   := -Wall -Wextra -Wformat -Wformat-security \
             -I./dev/security/seccomp \
             -I./dev/security/verify \
             -I./dev/security/core \
-            -I./dev/hal
+            -I./dev/hal \
+            -I./dev/hal/interface \
+            -I./dev/hal/layers/audio \
+            -I./dev/hal/layers/camera \
+            -I./dev/hal/layers/gpio \
+            -I./dev/hal/layers/sensors
 LDFLAGS  := -lpthread -lseccomp -lasound -pie \
             -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack
 SM_DIR   := dev/core/service_manager
@@ -79,11 +84,11 @@ PLATFORM_SECURITY := $(SEC_DIR)/capabilities/capabilities.c \
 
 # HAL Layer (Hardware Abstraction)
 HAL_DIR := dev/hal
-HAL_SRCS := $(HAL_DIR)/hal_interface.c \
-            $(HAL_DIR)/audio_hal.c \
-            $(HAL_DIR)/camera_hal.c \
-            $(HAL_DIR)/gpio_hal.c \
-            $(HAL_DIR)/sensor_hal.c
+HAL_SRCS := $(HAL_DIR)/interface/hal_interface.c \
+            $(HAL_DIR)/layers/audio/audio_hal.c \
+            $(HAL_DIR)/layers/camera/camera_hal.c \
+            $(HAL_DIR)/layers/gpio/gpio_hal.c \
+            $(HAL_DIR)/layers/sensors/sensor_hal.c
 
 # Observability Layer (Health, monitoring, logging, audit)
 SM_OBSERVABILITY := $(SM_DIR)/observability/sm_health.c \
