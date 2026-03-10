@@ -2,8 +2,6 @@
   "version": 6,
   "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
 
-  "$schema": "https://cmake.org/cmake/help/latest/_downloads/3e9f49c0dc80e09b1cd4a36c0f9e2e28/schema.json",
-
   "configurePresets": [
 
     {
