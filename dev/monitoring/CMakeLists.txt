@@ -141,7 +141,6 @@ target_sources(monitord
         daemon/monitord_state.c
         daemon/monitord_server.c
         daemon/monitord_http.c
-        middleware_monitor.c
 )
 
 target_include_directories(monitord
