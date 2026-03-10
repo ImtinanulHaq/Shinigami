@@ -206,6 +206,7 @@ target_link_libraries(mw_tui_bin
         mw::compile_opts
         mw::core
         Threads::Threads
+	mw_mon_health
 )
 
 target_include_directories(mw_tui_bin
