@@ -1,78 +1,60 @@
 #!/bin/bash
 ################################################################################
-# main_monitor - Complete Middleware Launcher & Monitor
+# main_monitor.sh — Complete Middleware Launcher & Monitor
 ################################################################################
-# Description: Starts all middleware services and launches the monitor dashboard
-# Usage: sudo ./main_monitor
+# Starts all middleware services and launches the TUI monitoring dashboard.
+# Usage: sudo ./main_monitor.sh
 ################################################################################
 
-set -e  # Exit on any error
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-NC='\033[0m' # No Color
+# Colors
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; CYAN='\033[0;36m'; MAGENTA='\033[0;35m'; NC='\033[0m'
 
 WORKSPACE="/home/muhammad-imtinan-ul-haq/Desktop/middleware"
-BUILD_DIR="$WORKSPACE/build/dev"
 
-# PIDs to track
+# ── Key binary paths ──────────────────────────────────────────────────────────
+MONITOR_TUI="$WORKSPACE/dev/monitoring/middleware_monitor_tui"
+SERVICES_BUILD="$WORKSPACE/dev/services/build"
+SM_BIN="$WORKSPACE/servicemanager"
+
+# Binaries inside the services build tree
+AUDIO_BIN="$SERVICES_BUILD/audio_service/audio_service"
+CAMERA_BIN="$SERVICES_BUILD/camera_service/camera_service"
+GPIO_BIN="$SERVICES_BUILD/gpio_service/gpio_service"
+SENSOR_BIN="$SERVICES_BUILD/sensor_service/sensor_service"
+
 PIDS=()
+MONITOR_PID=""
 
 ################################################################################
-# Cleanup Function
+# Cleanup
 ################################################################################
 cleanup() {
     echo ""
     echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
     echo -e "${YELLOW} Shutting down all services...${NC}"
     echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
-    
-    # Kill monitor first
-    if [ -n "$MONITOR_PID" ]; then
-        echo -e "${CYAN}[✓] Stopping monitor (PID $MONITOR_PID)${NC}"
-        kill $MONITOR_PID 2>/dev/null || true
-    fi
-    
-    # Kill all tracked services
+
+    [ -n "$MONITOR_PID" ] && kill "$MONITOR_PID" 2>/dev/null || true
+
     for pid in "${PIDS[@]}"; do
-        if kill -0 $pid 2>/dev/null; then
-            echo -e "${CYAN}[✓] Stopping service (PID $pid)${NC}"
-            kill $pid 2>/dev/null || true
-        fi
+        kill -0 "$pid" 2>/dev/null && kill "$pid" 2>/dev/null || true
     done
-    
-    # Kill any remaining processes
-    pkill -f "servicemanager" 2>/dev/null || true
-    pkill -f "audio_hal" 2>/dev/null || true
-    pkill -f "camera_hal" 2>/dev/null || true
-    pkill -f "sensor_hal" 2>/dev/null || true
-    pkill -f "gpio_hal" 2>/dev/null || true
-    pkill -x "audio_service" 2>/dev/null || true
+
+    pkill -x "audio_service"  2>/dev/null || true
     pkill -x "camera_service" 2>/dev/null || true
     pkill -x "sensor_service" 2>/dev/null || true
-    pkill -x "gpio_service" 2>/dev/null || true
-    pkill -f "middleware_monitord" 2>/dev/null || true
-    pkill -f "middleware_monitor" 2>/dev/null || true
-    pkill -f "middleware_monitor_tui" 2>/dev/null || true
-    # Remove mock service symlinks
+    pkill -x "gpio_service"   2>/dev/null || true
+    pkill -f "servicemanager" 2>/dev/null || true
+
+    # Remove mock symlinks
     rm -f /tmp/audio_service /tmp/camera_service /tmp/sensor_service /tmp/gpio_service 2>/dev/null || true
-    
-    # Clean up socket files
-    rm -f /run/servicemanager.sock 2>/dev/null || true
-    rm -f /tmp/servicemanager.sock 2>/dev/null || true
-    rm -f /tmp/middleware_monitor.sock 2>/dev/null || true
-    
+    # Clean sockets
+    rm -f /run/servicemanager.sock /tmp/servicemanager.sock /tmp/middleware_monitor.sock 2>/dev/null || true
+
     echo -e "${GREEN}[✓] All services stopped${NC}"
-    echo ""
     exit 0
 }
-
-# Setup trap for cleanup
 trap cleanup EXIT INT TERM
 
 ################################################################################
@@ -83,229 +65,154 @@ echo -e "${MAGENTA}"
 cat << "EOF"
 ╔══════════════════════════════════════════════════════════════════╗
 ║                                                                  ║
-║          MIDDLEWARE MONITOR - Complete System Launcher          ║
+║        MIDDLEWARE MONITOR — Complete System Launcher            ║
 ║                                                                  ║
-║  This script will:                                               ║
-║    1. Start Service Manager daemon                               ║
-║    2. Start HAL services (audio, camera, sensor, gpio)          ║
-║    3. Launch the monitoring dashboard                            ║
+║  Steps:                                                          ║
+║    1. Build monitor TUI (if needed)                              ║
+║    2. Build service binaries (if needed)                         ║
+║    3. Start Service Manager                                      ║
+║    4. Start all 4 platform services                              ║
+║    5. Launch TUI monitoring dashboard                            ║
 ║                                                                  ║
-║  Press Ctrl+C to stop all services and exit                      ║
+║  Press Ctrl+C to stop everything and exit                        ║
 ║                                                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
 EOF
 echo -e "${NC}"
 
 ################################################################################
-# Validation
+# [1/5] Validate environment
 ################################################################################
-echo -e "${BLUE}[1/6] Validating environment...${NC}"
+echo -e "${BLUE}[1/5] Validating environment...${NC}"
 
-# Check if running as root/sudo
-if [ "$EUID" -ne 0 ]; then 
-    echo -e "${RED}[✗] Error: This script must be run as root (use sudo)${NC}"
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}[✗] Must be run as root: sudo ./main_monitor.sh${NC}"
     exit 1
 fi
 
-# Check if workspace exists
 if [ ! -d "$WORKSPACE" ]; then
-    echo -e "${RED}[✗] Error: Workspace not found: $WORKSPACE${NC}"
+    echo -e "${RED}[✗] Workspace not found: $WORKSPACE${NC}"
     exit 1
 fi
 
 cd "$WORKSPACE" || exit 1
+echo -e "${GREEN}[✓] Environment OK${NC}"
 
-# Check if monitoring system exists
-MONITOR_STANDALONE="$WORKSPACE/monitoring/build/middleware_monitor"
-MONITOR_TUI="$WORKSPACE/monitoring/build/middleware_monitor_tui"
-MONITOR_DAEMON="$WORKSPACE/monitoring/build/middleware_monitord"
+################################################################################
+# [2/5] Build monitor TUI (if missing)
+################################################################################
+echo -e "${BLUE}[2/5] Checking monitor TUI...${NC}"
 
-if [ ! -f "$MONITOR_TUI" ] || [ ! -f "$MONITOR_DAEMON" ]; then
-    echo -e "${YELLOW}[!] Monitoring system not found. Building...${NC}"
-    cd monitoring/build || {
-        echo -e "${YELLOW}[!] Build directory not found, creating...${NC}"
-        mkdir -p monitoring/build
-        cd monitoring/build || exit 1
-        cmake .. || {
-            echo -e "${RED}[✗] CMake failed${NC}"
-            exit 1
-        }
-    }
-    make -j$(nproc) || {
-        echo -e "${RED}[✗] Build failed${NC}"
+if [ ! -f "$MONITOR_TUI" ]; then
+    echo -e "${YELLOW}[!] monitor TUI not found — building...${NC}"
+    gcc -O2 -Wall -o "$MONITOR_TUI" \
+        "$WORKSPACE/dev/monitoring/middleware_monitor.c" \
+        -lncurses -lpthread -lm
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}[✓] Monitor TUI built: $MONITOR_TUI${NC}"
+    else
+        echo -e "${RED}[✗] Monitor TUI build failed${NC}"
         exit 1
-    }
+    fi
+else
+    echo -e "${GREEN}[✓] Monitor TUI ready: $(du -sh "$MONITOR_TUI" | cut -f1) binary${NC}"
+fi
+
+################################################################################
+# [3/5] Build service binaries (if missing)
+################################################################################
+echo -e "${BLUE}[3/5] Checking service binaries...${NC}"
+
+SERVICES_NEED_BUILD=0
+for bin in "$AUDIO_BIN" "$CAMERA_BIN" "$GPIO_BIN" "$SENSOR_BIN"; do
+    [ ! -f "$bin" ] && SERVICES_NEED_BUILD=1 && break
+done
+
+if [ "$SERVICES_NEED_BUILD" -eq 1 ]; then
+    echo -e "${YELLOW}[!] Service binaries not found — building...${NC}"
+    cd "$WORKSPACE/dev/services" || exit 1
+    cmake -B build -DCMAKE_BUILD_TYPE=Release -Wno-dev -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -3
+    cmake --build build -j"$(nproc)" 2>&1 | grep -E "Built target|Error" | head -20
     cd "$WORKSPACE" || exit 1
 fi
 
-echo -e "${GREEN}[✓] Environment validated${NC}"
-sleep 1
-
-################################################################################
-# Build Services (if needed)
-################################################################################
-echo -e "${BLUE}[2/6] Checking service binaries...${NC}"
-
-# Check if servicemanager exists
-SM_BIN=""
-if [ -f "servicemanager" ]; then
-    SM_BIN="$WORKSPACE/servicemanager"
-elif [ -f "$BUILD_DIR/core/service_manager/servicemanager" ]; then
-    SM_BIN="$BUILD_DIR/core/service_manager/servicemanager"
-elif [ -f "bankai" ]; then
-    SM_BIN="$WORKSPACE/bankai"
-fi
-
-if [ -z "$SM_BIN" ]; then
-    echo -e "${YELLOW}[!] Service Manager not found - Building middleware...${NC}"
-    if [ -f "Makefile" ]; then
-        echo -e "${CYAN}    Running: make servicemanager${NC}"
-        make servicemanager 2>&1 | tail -10
-        
-        # Check again after build
-        if [ -f "servicemanager" ]; then
-            SM_BIN="$WORKSPACE/servicemanager"
-            echo -e "${GREEN}[✓] Service Manager built successfully${NC}"
-        elif [ -f "bankai" ]; then
-            SM_BIN="$WORKSPACE/bankai"
-            echo -e "${GREEN}[✓] Service Manager (bankai) built successfully${NC}"
-        else
-            echo -e "${YELLOW}[!] Build completed but binary not found${NC}"
-            echo -e "${CYAN}    Will run monitoring system only (no services)${NC}"
-        fi
+# Confirm all 4 exist
+ALL_OK=1
+for bin in "$AUDIO_BIN" "$CAMERA_BIN" "$GPIO_BIN" "$SENSOR_BIN"; do
+    if [ -f "$bin" ]; then
+        echo -e "${GREEN}[✓] $(basename "$bin") binary ready${NC}"
     else
-        echo -e "${YELLOW}[!] No Makefile found - will run monitoring only${NC}"
+        echo -e "${YELLOW}[!] $(basename "$bin") binary not found — will use mock${NC}"
+        ALL_OK=0
     fi
-else
-    echo -e "${GREEN}[✓] Service Manager found: $SM_BIN${NC}"
-fi
-
-# Check HAL services
-HAL_DIR="$BUILD_DIR/hal"
-if [ ! -d "$HAL_DIR" ]; then
-    echo -e "${YELLOW}[!] HAL directory not found${NC}"
-fi
-
-echo -e "${GREEN}[✓] Service binaries check complete${NC}"
-sleep 1
+done
+[ "$ALL_OK" -eq 1 ] && echo -e "${GREEN}[✓] All 4 service binaries ready${NC}"
 
 ################################################################################
-# Clean Previous State
+# [4/5] Start Services
 ################################################################################
-echo -e "${BLUE}[3/6] Cleaning previous state...${NC}"
+echo -e "${BLUE}[4/5] Starting services...${NC}"
 
-# Kill any existing processes
+# Clean previous state
+pkill -x "audio_service" 2>/dev/null || true
+pkill -x "camera_service" 2>/dev/null || true
+pkill -x "sensor_service" 2>/dev/null || true
+pkill -x "gpio_service" 2>/dev/null || true
 pkill -f "servicemanager" 2>/dev/null || true
-pkill -f "audio_hal" 2>/dev/null || true
-pkill -f "camera_hal" 2>/dev/null || true
-pkill -f "sensor_hal" 2>/dev/null || true
-pkill -f "gpio_hal" 2>/dev/null || true
-
-# Remove old sockets
-rm -f /run/servicemanager.sock 2>/dev/null || true
-rm -f /tmp/servicemanager.sock 2>/dev/null || true
-
-# Create log directory
+rm -f /run/servicemanager.sock /tmp/servicemanager.sock
 mkdir -p /var/log
 touch /var/log/servicemanager_audit.log 2>/dev/null || true
 chmod 666 /var/log/servicemanager_audit.log 2>/dev/null || true
+sleep 0.5
 
-echo -e "${GREEN}[✓] Previous state cleaned${NC}"
-sleep 1
-
-################################################################################
 # Start Service Manager
-################################################################################
-echo -e "${BLUE}[4/6] Starting Service Manager...${NC}"
-
 if [ -f "$SM_BIN" ]; then
-    # Start Service Manager in background
-    $SM_BIN > /tmp/servicemanager.log 2>&1 &
+    "$SM_BIN" > /tmp/servicemanager.log 2>&1 &
     SM_PID=$!
-    PIDS+=($SM_PID)
-    
+    PIDS+=("$SM_PID")
     echo -e "${GREEN}[✓] Service Manager started (PID: $SM_PID)${NC}"
-    
-    # Wait for socket to be created
-    for i in {1..10}; do
-        if [ -S "/run/servicemanager.sock" ] || [ -S "/tmp/servicemanager.sock" ]; then
-            echo -e "${GREEN}[✓] Service Manager socket ready${NC}"
-            break
-        fi
-        echo -e "${CYAN}    Waiting for socket... ($i/10)${NC}"
+    # Wait for socket
+    for i in $(seq 1 8); do
+        [ -S "/run/servicemanager.sock" ] || [ -S "/tmp/servicemanager.sock" ] && \
+            echo -e "${GREEN}[✓] SM socket ready${NC}" && break
+        echo -e "${CYAN}    Waiting for SM socket... ($i/8)${NC}"
         sleep 1
     done
 else
-    echo -e "${YELLOW}[!] Service Manager binary not found, monitor will show system stats only${NC}"
+    echo -e "${YELLOW}[!] servicemanager binary not found — monitor runs in stats-only mode${NC}"
 fi
 
-sleep 2
+# Helper: start real binary or fallback to /bin/sleep mock with correct comm
+start_service() {
+    local name="$1"
+    local bin="$2"
 
-################################################################################
-# Start HAL Services
-################################################################################
-echo -e "${BLUE}[5/6] Starting HAL services...${NC}"
-
-# Function to start a mock service
-start_mock_service() {
-    local name=$1
-
-    # KEY FIX: We need /proc/[pid]/comm to equal $name so the monitor can
-    # detect it. A bash subshell has comm=bash — NOT detectable.
-    # Solution: symlink /bin/sleep to /tmp/$name and run it.
-    # The kernel sets comm from the executable basename → comm=$name ✓
-    ln -sf /bin/sleep "/tmp/${name}"
-    "/tmp/${name}" infinity &
-
-    local pid=$!
-    PIDS+=($pid)
-    echo -e "${GREEN}[✓] $name started (PID: $pid)${NC}"
+    if [ -f "$bin" ]; then
+        # Run the real service binary
+        "$bin" > "/tmp/${name}.log" 2>&1 &
+        local pid=$!
+        PIDS+=("$pid")
+        echo -e "${GREEN}[✓] $name started (PID: $pid) [real binary]${NC}"
+    else
+        # Mock: symlink /bin/sleep so /proc/[pid]/comm = $name
+        ln -sf /bin/sleep "/tmp/${name}"
+        "/tmp/${name}" infinity &
+        local pid=$!
+        PIDS+=("$pid")
+        echo -e "${YELLOW}[~] $name started (PID: $pid) [mock — binary not found]${NC}"
+    fi
+    sleep 0.3
 }
 
-# Start HAL services
-if [ -f "$HAL_DIR/audio_hal" ]; then
-    $HAL_DIR/audio_hal &
-    PIDS+=($!)
-    echo -e "${GREEN}[✓] Audio HAL started (PID: $!)${NC}"
-else
-    start_mock_service "audio_service"
-fi
+start_service "audio_service"  "$AUDIO_BIN"
+start_service "camera_service" "$CAMERA_BIN"
+start_service "gpio_service"   "$GPIO_BIN"
+start_service "sensor_service" "$SENSOR_BIN"
 
-sleep 0.5
-
-if [ -f "$HAL_DIR/camera_hal" ]; then
-    $HAL_DIR/camera_hal &
-    PIDS+=($!)
-    echo -e "${GREEN}[✓] Camera HAL started (PID: $!)${NC}"
-else
-    start_mock_service "camera_service"
-fi
-
-sleep 0.5
-
-if [ -f "$HAL_DIR/sensor_hal" ]; then
-    $HAL_DIR/sensor_hal &
-    PIDS+=($!)
-    echo -e "${GREEN}[✓] Sensor HAL started (PID: $!)${NC}"
-else
-    start_mock_service "sensor_service"
-fi
-
-sleep 0.5
-
-if [ -f "$HAL_DIR/gpio_hal" ]; then
-    $HAL_DIR/gpio_hal &
-    PIDS+=($!)
-    echo -e "${GREEN}[✓] GPIO HAL started (PID: $!)${NC}"
-else
-    start_mock_service "gpio_service"
-fi
-
-echo -e "${GREEN}[✓] All HAL services started${NC}"
-sleep 2
+sleep 1
 
 ################################################################################
-# Show Status
+# Status summary
 ################################################################################
 echo ""
 echo -e "${MAGENTA}═══════════════════════════════════════════════════════════${NC}"
@@ -313,57 +220,51 @@ echo -e "${MAGENTA} Service Status Summary${NC}"
 echo -e "${MAGENTA}═══════════════════════════════════════════════════════════${NC}"
 echo ""
 
-if [ -n "$SM_PID" ] && kill -0 $SM_PID 2>/dev/null; then
-    echo -e "${GREEN}[✓] Service Manager       : Running (PID $SM_PID)${NC}"
+if [ -n "$SM_PID" ] && kill -0 "$SM_PID" 2>/dev/null; then
+    echo -e "${GREEN}[✓] Service Manager   : Running (PID $SM_PID)${NC}"
 else
-    echo -e "${YELLOW}[!] Service Manager       : Not running${NC}"
+    echo -e "${YELLOW}[!] Service Manager   : Not running${NC}"
 fi
 
-echo -e "${GREEN}[✓] HAL Services          : ${#PIDS[@]} services running${NC}"
+RUNNING=0
+for pid in "${PIDS[@]}"; do
+    kill -0 "$pid" 2>/dev/null && RUNNING=$((RUNNING+1))
+done
+echo -e "${GREEN}[✓] Services running  : $RUNNING / ${#PIDS[@]}${NC}"
 
 if [ -S "/run/servicemanager.sock" ]; then
-    echo -e "${GREEN}[✓] SM Socket             : /run/servicemanager.sock${NC}"
+    echo -e "${GREEN}[✓] SM Socket         : /run/servicemanager.sock${NC}"
 elif [ -S "/tmp/servicemanager.sock" ]; then
-    echo -e "${GREEN}[✓] SM Socket             : /tmp/servicemanager.sock${NC}"
+    echo -e "${GREEN}[✓] SM Socket         : /tmp/servicemanager.sock${NC}"
 else
-    echo -e "${YELLOW}[!] SM Socket             : Not found${NC}"
+    echo -e "${YELLOW}[!] SM Socket         : not found${NC}"
 fi
 
 echo ""
-echo -e "${CYAN}Active PIDs: ${PIDS[*]}${NC}"
+echo -e "${CYAN}PIDs: ${PIDS[*]}${NC}"
 echo ""
 
 ################################################################################
-# Launch Monitor
+# [5/5] Launch TUI
 ################################################################################
-echo -e "${BLUE}[6/6] Launching Monitor Dashboard...${NC}"
+echo -e "${BLUE}[5/5] Launching Monitor Dashboard...${NC}"
+echo ""
+echo -e "${MAGENTA}═══════════════════════════════════════════════════════════${NC}"
+echo -e "${MAGENTA} TUI Controls:${NC}"
+echo -e "${MAGENTA}   Q / ESC      — Quit (stops all services)${NC}"
+echo -e "${MAGENTA}   Tab / →      — Next panel${NC}"
+echo -e "${MAGENTA}   ←            — Previous panel${NC}"
+echo -e "${MAGENTA}   0-9          — Jump to panel by number${NC}"
+echo -e "${MAGENTA}   r            — Force refresh${NC}"
+echo -e "${MAGENTA}   F1           — Help screen (all 15 panels)${NC}"
+echo -e "${MAGENTA}═══════════════════════════════════════════════════════════${NC}"
 sleep 2
 
-# Set locale for Unicode support
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
-# Start monitoring daemon first
-echo -e "${BLUE}Starting monitoring daemon...${NC}"
-$MONITOR_DAEMON > /tmp/monitord.log 2>&1 &
-MONITORD_PID=$!
-PIDS+=($MONITORD_PID)
-echo -e "${GREEN}[✓] Monitoring daemon started (PID: $MONITORD_PID)${NC}"
-sleep 2
+# Launch TUI — blocks until user quits
+MONITOR_PID=""
+"$MONITOR_TUI"
 
-echo -e "${MAGENTA}═══════════════════════════════════════════════════════════${NC}"
-echo -e "${MAGENTA} Monitor Controls:${NC}"
-echo -e "${MAGENTA}   Q - Quit monitor (will stop all services)${NC}"
-echo -e "${MAGENTA}   Arrow keys - Navigate${NC}"
-echo -e "${MAGENTA}   ESC - Exit${NC}"
-echo -e "${MAGENTA}═══════════════════════════════════════════════════════════${NC}"
-sleep 2
-
-# Launch monitor TUI (blocking) — prefer standalone binary
-if [ -f "$MONITOR_STANDALONE" ]; then
-    "$MONITOR_STANDALONE"
-else
-    "$MONITOR_TUI"
-fi
-
-# When monitor exits, cleanup will be called automatically
+# cleanup() auto-called on exit
