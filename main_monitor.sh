@@ -186,10 +186,15 @@ fi
 start_service() {
     local name="$1"
     local bin="$2"
+    local conf="$WORKSPACE/dev/services/${name}/${name}.conf"
 
     if [ -f "$bin" ]; then
-        # Run the real service binary
-        "$bin" > "/tmp/${name}.log" 2>&1 &
+        # Run the real service binary with required config + foreground flag
+        if [ -f "$conf" ]; then
+            "$bin" -c "$conf" -f > "/tmp/${name}.log" 2>&1 &
+        else
+            "$bin" -f > "/tmp/${name}.log" 2>&1 &
+        fi
         local pid=$!
         PIDS+=("$pid")
         echo -e "${GREEN}[✓] $name started (PID: $pid) [real binary]${NC}"

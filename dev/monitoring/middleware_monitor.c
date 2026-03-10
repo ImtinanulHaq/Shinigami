@@ -1890,7 +1890,7 @@ static void draw_panel_hal(WINDOW *win, const monitor_data_t *d)
             row++;
         } else {
             wattron(win, COLOR_PAIR(CP_YELLOW));
-            mvwprintw(win, row, 16, "NOT RUNNING  (real binary not found - mock not detectable)");
+            mvwprintw(win, row, 16, "NOT RUNNING  (process not detected in /proc)");
             wattroff(win, COLOR_PAIR(CP_YELLOW));
             row++;
         }
@@ -2015,7 +2015,7 @@ static void draw_panel_io(WINDOW *win, const monitor_data_t *d)
     wattroff(win, A_BOLD);
     if (d->uring_count == 0) {
         wattron(win, COLOR_PAIR(CP_DIM));
-        mvwprintw(win, row++, 4, "(none detected — no middleware io_uring users running)");
+        mvwprintw(win, row++, 4, "(none detected - no middleware io_uring users running)");
         wattroff(win, COLOR_PAIR(CP_DIM));
     } else {
         wattron(win, A_UNDERLINE);
@@ -2050,7 +2050,7 @@ static void draw_panel_io(WINDOW *win, const monitor_data_t *d)
     }
     if (d->service_count == 0) {
         wattron(win, COLOR_PAIR(CP_YELLOW));
-        mvwprintw(win, row, 2, "io_uring stats unavailable — no services detected");
+        mvwprintw(win, row, 2, "io_uring stats unavailable - no services detected");
         wattroff(win, COLOR_PAIR(CP_YELLOW));
     }
     (void)rows; wrefresh(win);
@@ -2072,7 +2072,7 @@ static void draw_panel_ringbufs(WINDOW *win, const monitor_data_t *d)
 
     if (d->ringbuf_count == 0) {
         wattron(win, COLOR_PAIR(CP_DIM));
-        mvwprintw(win, row++, 2, "(no ring buffers detected — /dev/shm/ entries not found)");
+        mvwprintw(win, row++, 2, "(no ring buffers detected - /dev/shm/ entries not found)");
         wattroff(win, COLOR_PAIR(CP_DIM));
     } else {
         wattron(win, A_UNDERLINE);
@@ -2226,7 +2226,7 @@ static void draw_panel_watchdog(WINDOW *win, const monitor_data_t *d)
     }
     if (d->watchdog.count == 0) {
         wattron(win, COLOR_PAIR(CP_DIM));
-        mvwprintw(win, row, 2, "(no watchdog entries — services not running)");
+        mvwprintw(win, row, 2, "(no watchdog entries - services not running)");
         wattroff(win, COLOR_PAIR(CP_DIM));
     }
     wattron(win, COLOR_PAIR(CP_DIM));
@@ -2341,7 +2341,7 @@ static void draw_panel_sm_detail(WINDOW *win, const monitor_data_t *d)
 
     /* Health check latencies */
     mvwhline(win, row++, 1, ACS_HLINE, cols-2);
-    wattron(win, A_BOLD); mvwprintw(win, row++, 2, "Health Check Latencies (µs):"); wattroff(win, A_BOLD);
+    wattron(win, A_BOLD); mvwprintw(win, row++, 2, "Health Check Latencies (us):"); wattroff(win, A_BOLD);
     mvwprintw(win, row++, 4, "p50 :%6u   p95 :%6u   p99 :%6u   p999:%6u",
               sm->health_p50_us, sm->health_p95_us,
               sm->health_p99_us, sm->health_p999_us);
@@ -2363,7 +2363,8 @@ static void draw_panel_sm_detail(WINDOW *win, const monitor_data_t *d)
         int cp2 = v>80.0f ? CP_RED : v>60.0f ? CP_YELLOW : CP_GREEN;
         int bar_h = (int)(v/100.0f*5);
         wattron(win, COLOR_PAIR(cp2));
-        const char *blks[] = {" ","▁","▂","▃","▄","▅"};
+        /* ASCII sparkline: space + 5 levels using pipe/block chars safe on all terminals */
+        const char *blks[] = {" ", ".", ":", "|", "I", "#"};
         mvwprintw(win, row, 4+i, "%s", blks[bar_h < 5 ? bar_h : 5]);
         wattroff(win, COLOR_PAIR(cp2));
     }
@@ -2766,7 +2767,7 @@ static void draw_panel_help(WINDOW *win)
         "PANELS (15 total)",
         "   0  Overview      System summary: CPU, RAM, services, sparkline",
         "   1  Services      Per-service detail: CPU, RAM, FDs, security flags",
-        "   2  HAL           Hardware Abstraction Layer — audio/camera/gpio/sensor",
+        "   2  HAL           Hardware Abstraction Layer - audio/camera/gpio/sensor",
         "   3  Memory        Memory pools, swap, slab, usage bars",
         "   4  I/O           Disk I/O, io_uring instances, per-service FDs",
         "   5  Ring Bufs     Ring buffer fill%, write/read/drop counters",
