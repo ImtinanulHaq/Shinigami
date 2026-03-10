@@ -1,0 +1,55 @@
+[Unit]
+Description=GPIO Hardware Abstraction Service
+Documentation=man:gpio_service(8)
+After=network.target service_manager.service
+Requires=service_manager.service
+
+[Service]
+Type=forking
+PIDFile=/run/gpio_service.pid
+ExecStart=/usr/local/bin/gpio_service -c /etc/gpio_service/gpio_service.conf
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStop=/bin/kill -TERM $MAINPID
+
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=20
+
+User=gpio
+Group=gpio
+
+# Hardware access (character device gpio lines)
+SupplementaryGroups=dialout
+
+DeviceAllow=char:/dev/gpiochip0 rwm
+
+# Resource limits (GPIO is very lightweight)
+MemoryMax=16M
+CPUQuota=5%
+TasksMax=8
+
+# Security hardening
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_SYS_RAWIO
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=no
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ReadWritePaths=/var/log /run
+ReadOnlyPaths=/etc/gpio_service
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gpio_service
+
+[Install]
+WantedBy=multi-user.target
