@@ -25,6 +25,11 @@ static int services_tick(collector_t *self, struct monitord_state *state)
     /* TODO: Query security metrics, update state->services[3] */
     state->services[3].health_score = 100;
     strncpy(state->services[3].name, "Security", sizeof(state->services[3].name)-1);
+    state->services[3].running      = 1;
+    state->services[3].sandbox_ok   = 1;
+    state->services[3].caps_ok      = 1;
+    state->services[3].verify_ok    = 1;
+    state->services[3].seccomp_ok   = 1;
     return 0;
 }
 

@@ -25,6 +25,11 @@ static int watchdog_tick(collector_t *self, struct monitord_state *state)
     /* TODO: Query watchdog metrics, update state->services[1] */
     state->services[1].health_score = 100;
     strncpy(state->services[1].name, "Watchdog", sizeof(state->services[1].name)-1);
+    state->services[1].running      = 1;
+    state->services[1].sandbox_ok   = 1;
+    state->services[1].caps_ok      = 1;
+    state->services[1].verify_ok    = 1;
+    state->services[1].seccomp_ok   = 1;
     return 0;
 }
 

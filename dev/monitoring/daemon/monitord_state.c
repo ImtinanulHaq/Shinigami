@@ -116,6 +116,15 @@ void monitord_state_serialize_snapshot(monitord_state_t *state,
 
     snapshot->snapshot_seq = state->snapshot_seq++;
 
+    /* Compute service_count from non-empty service slots */
+    {
+        uint32_t sc = 0;
+        for (uint32_t i = 0; i < SERVICE_MAX; i++) {
+            if (snapshot->services[i].name[0]) sc++;
+        }
+        snapshot->service_count = sc;
+    }
+
     /* Release ALL locks in reverse order */
     pthread_rwlock_unlock(&state->lock_urings);
     pthread_rwlock_unlock(&state->lock_sysinfo);

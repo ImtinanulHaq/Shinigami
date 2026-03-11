@@ -16,6 +16,55 @@ void panel_overview_render(const mon_snapshot_t *snapshot, int y, int h, int col
     mvprintw(row++, 2, "=== System Overview ===");
     row++;
 
+    /* ── System Resources ─────────────────────────────────────────── */
+    /* CPU */
+    {
+        float cpu = snapshot->sysinfo.cpu_total_pct;
+        int cpu_col = (cpu > 80.0f) ? COLOR_PAIR_CRITICAL
+                    : (cpu > 50.0f) ? COLOR_PAIR_WARNING
+                    :                 COLOR_PAIR_GOOD;
+        mvprintw(row, 4, "CPU Total:   ");
+        attron(COLOR_PAIR(cpu_col) | A_BOLD);
+        printw("%5.1f%%", (double)cpu);
+        attroff(A_BOLD | COLOR_PAIR(cpu_col));
+        if (snapshot->sysinfo.num_cores > 0)
+            printw("  (%u cores)", (unsigned)snapshot->sysinfo.num_cores);
+        row++;
+    }
+
+    /* RAM */
+    {
+        uint64_t used_mb  = snapshot->sysinfo.ram_used_bytes  / (1024ULL * 1024ULL);
+        uint64_t total_mb = snapshot->sysinfo.ram_total_bytes / (1024ULL * 1024ULL);
+        float ram_pct = (total_mb > 0) ? ((float)used_mb * 100.0f / (float)total_mb) : 0.0f;
+        int ram_col = (ram_pct > 80.0f) ? COLOR_PAIR_CRITICAL
+                    : (ram_pct > 50.0f) ? COLOR_PAIR_WARNING
+                    :                     COLOR_PAIR_GOOD;
+        mvprintw(row, 4, "RAM:         ");
+        attron(COLOR_PAIR(ram_col) | A_BOLD);
+        printw("%lu / %lu MB  (%.1f%%)", (unsigned long)used_mb, (unsigned long)total_mb, (double)ram_pct);
+        attroff(A_BOLD | COLOR_PAIR(ram_col));
+        row++;
+    }
+
+    /* Load average */
+    mvprintw(row++, 4, "Load avg:    %.2f  %.2f  %.2f  (1 / 5 / 15 min)",
+             (double)snapshot->sysinfo.load_1,
+             (double)snapshot->sysinfo.load_5,
+             (double)snapshot->sysinfo.load_15);
+
+    /* Uptime */
+    {
+        uint64_t up = snapshot->sysinfo.uptime_s;
+        if (up < 3600)
+            mvprintw(row++, 4, "Uptime:      %lum %02lus",
+                     (unsigned long)(up / 60), (unsigned long)(up % 60));
+        else
+            mvprintw(row++, 4, "Uptime:      %luh %02lum",
+                     (unsigned long)(up / 3600), (unsigned long)((up % 3600) / 60));
+    }
+    row++;
+
     /* Service Manager */
     mvprintw(row++, 4, "Service Manager: %u PID | Services: %u/%u registered | CPU: %.1f%%",
              snapshot->sm.pid, snapshot->sm.registered_services,
