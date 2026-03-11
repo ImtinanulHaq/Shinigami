@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h> /* mlock / munlock */
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -328,6 +329,16 @@ int sm_crypto_init(void) {
       close(fd);
       if (n == SM_HMAC_KEY_SIZE) {
         g_key_loaded = 1;
+        /*
+         * mlock() pins the page containing the key in RAM so the
+         * kernel never writes it to the swap partition.
+         * Non-fatal if the process lacks CAP_IPC_LOCK or the
+         * memlock rlimit is exhausted; log a warning and continue.
+         */
+        if (mlock(g_key, sizeof(g_key)) != 0) {
+          sm_log(SM_LOG_WARN, "crypto: mlock failed — key may be swappable: %s",
+                 strerror(errno));
+        }
         sm_log(SM_LOG_INFO, "crypto: key loaded from %s", key_file);
         return 0;
       }
@@ -362,6 +373,10 @@ int sm_crypto_init(void) {
     }
 
     g_key_loaded = 1;
+    if (mlock(g_key, sizeof(g_key)) != 0) {
+      sm_log(SM_LOG_WARN, "crypto: mlock failed — key may be swappable: %s",
+             strerror(errno));
+    }
     sm_log(SM_LOG_INFO, "crypto: new key generated and saved to %s", key_file);
     return 0;
   }
@@ -379,6 +394,12 @@ const uint8_t *sm_crypto_get_key(void) {
 }
 
 void sm_crypto_cleanup(void) {
+  /*
+   * Unlock before zeroing so the kernel is free to evict the now-empty
+   * page.  munlock on an unlocked page is a no-op, so this is safe even
+   * if mlock() failed at init time.
+   */
+  munlock(g_key, sizeof(g_key));
   explicit_bzero(g_key, sizeof(g_key));
   g_key_loaded = 0;
 }

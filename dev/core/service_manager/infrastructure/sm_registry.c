@@ -26,6 +26,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <pthread.h>
 #include <time.h>
@@ -174,9 +175,13 @@ int sm_registry_add(const service_entry_t* entry)
 
     int idx             = registry_count++;
     registry[idx]       = *entry;
-    registry[idx].registered_at = time(NULL);
-    registry[idx].restart_count = 0;
-    registry[idx].status        = SERVICE_RUNNING;
+    /* Initialise atomic hot-path fields explicitly so values are well-defined
+     * regardless of what the caller placed in *entry. */
+    registry[idx].registered_at = time(NULL);           /* plain field */
+    atomic_init(&registry[idx].restart_count, 0);
+    atomic_init(&registry[idx].status,        SERVICE_RUNNING);
+    atomic_init(&registry[idx].last_heartbeat, time(NULL));
+    atomic_init(&registry[idx].last_crash_time, (time_t)0);
 
     hash_insert(entry->name, idx);
 
@@ -217,7 +222,14 @@ int sm_registry_update_status(const char* name, service_status_t status)
 {
     if (!name) return SM_ERR_INVALID;
 
-    pthread_rwlock_wrlock(&registry_lock);
+    /*
+     * READ lock is sufficient: the only mutable state touched here lives in
+     * _Atomic fields (status, last_crash_time, restart_count).  Taking a
+     * read lock still serialises against structural write operations
+     * (add/remove) that hold the write lock, so the index returned by
+     * hash_find() stays valid until we unlock.
+     */
+    pthread_rwlock_rdlock(&registry_lock);
 
     int idx = hash_find(name);
     if (idx < 0) {
@@ -225,16 +237,18 @@ int sm_registry_update_status(const char* name, service_status_t status)
         return SM_ERR_NOT_FOUND;
     }
 
-    service_status_t old = registry[idx].status;
-    registry[idx].status = status;
+    service_status_t old = atomic_load_explicit(&registry[idx].status,
+                                                memory_order_relaxed);
+    atomic_store_explicit(&registry[idx].status, status,
+                          memory_order_release);
 
     if (status == SERVICE_CRASHED) {
-        registry[idx].last_crash_time = time(NULL);
-        registry[idx].restart_count++;
+        atomic_store_explicit(&registry[idx].last_crash_time, time(NULL),
+                              memory_order_relaxed);
+        atomic_fetch_add_explicit(&registry[idx].restart_count, 1,
+                                  memory_order_relaxed);
     }
-    /* FIX 3: SERVICE_DEAD = give-up state — restart_count increment nahi karo
-     * Pehle: koi bhi status change restart_count badhata tha
-     * Ab: sirf SERVICE_CRASHED pe increment hota hai */
+    /* SERVICE_DEAD = give-up state — restart_count stays as-is */
 
     pthread_rwlock_unlock(&registry_lock);
 
@@ -249,7 +263,12 @@ int sm_registry_update_heartbeat(const char* name)
 {
     if (!name) return SM_ERR_INVALID;
 
-    pthread_rwlock_wrlock(&registry_lock);
+    /*
+     * READ lock: only _Atomic fields (last_heartbeat, status) are written.
+     * Multiple callers can update different services' heartbeats in parallel
+     * — no write-lock contention on the hot heartbeat path.
+     */
+    pthread_rwlock_rdlock(&registry_lock);
 
     int idx = hash_find(name);
     if (idx < 0) {
@@ -257,8 +276,10 @@ int sm_registry_update_heartbeat(const char* name)
         return SM_ERR_NOT_FOUND;
     }
 
-    registry[idx].last_heartbeat = time(NULL);
-    registry[idx].status         = SERVICE_RUNNING;
+    atomic_store_explicit(&registry[idx].last_heartbeat, time(NULL),
+                          memory_order_release);
+    atomic_store_explicit(&registry[idx].status, SERVICE_RUNNING,
+                          memory_order_release);
 
     pthread_rwlock_unlock(&registry_lock);
     return SM_OK;
@@ -327,7 +348,14 @@ int sm_registry_get_all(service_entry_t** out, int* count)
         return SM_ERR_FULL;
     }
 
-    memcpy(copy, registry, copy_size);
+    /*
+     * Use struct assignment (not memcpy) so that _Atomic fields are read
+     * through the proper atomic load path.  The read lock held above
+     * ensures no structural change races with this loop.
+     */
+    for (int i = 0; i < registry_count; i++) {
+        copy[i] = registry[i];
+    }
     *out   = copy;
     *count = registry_count;
 

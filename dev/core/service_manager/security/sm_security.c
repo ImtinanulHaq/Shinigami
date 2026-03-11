@@ -6,16 +6,6 @@
 /*
  * sm_security.c - Privilege drop, resource limits, seccomp filter, peer
  * credentials.
- *
- * Fixes applied:
- *   - sm_drop_privileges() verifies the drop succeeded and confirms root cannot
- *     be regained.
- *   - Seccomp whitelist extended with syscalls needed by pthreads and malloc
- *     (futex, mmap, munmap, mprotect, brk, clone, getrandom, getpid, gettid).
- *   - openat/fstat/lseek added for log file and key file access.
- *   - SYS_kill retained but documented; it is needed for the health monitor.
- *     If tighter confinement is required, replace kill() with a private signal
- *     mechanism and remove it from the whitelist.
  */
 
 #include "sm_security.h"
@@ -27,6 +17,7 @@
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <pwd.h>
+#include <signal.h> /* SIGTERM, SIGKILL, SIGCHLD */
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -147,7 +138,6 @@ int sm_set_resource_limits(void) {
 
 /*
  * Helper macro: allow one syscall number and fall through to the next rule.
- * Each BPF_JUMP + BPF_STMT pair occupies two filter slots.
  */
 #define ALLOW_SYSCALL(nr)                                                      \
   BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (nr), 0, 1),                             \
@@ -202,19 +192,21 @@ int sm_setup_seccomp(void) {
       ALLOW_SYSCALL(SYS_epoll_wait),
       ALLOW_SYSCALL(SYS_epoll_pwait),
 
-      /* Threading (pthreads: mutex/condvar/rwlock use futex internally) */
+      /* Threading */
       ALLOW_SYSCALL(SYS_futex),
       ALLOW_SYSCALL(SYS_clone), /* pthread_create */
       ALLOW_SYSCALL(SYS_getpid),
       ALLOW_SYSCALL(SYS_gettid),
       ALLOW_SYSCALL(SYS_set_robust_list),
 
-      /* Memory (malloc, thread stacks) */
+      /* Memory */
       ALLOW_SYSCALL(SYS_brk),
       ALLOW_SYSCALL(SYS_mmap),
       ALLOW_SYSCALL(SYS_munmap),
       ALLOW_SYSCALL(SYS_mprotect),
       ALLOW_SYSCALL(SYS_mremap),
+      ALLOW_SYSCALL(SYS_mlock), /* Pin key in RAM */
+      ALLOW_SYSCALL(SYS_munlock),
 
       /* Time */
       ALLOW_SYSCALL(SYS_clock_gettime),
@@ -222,56 +214,46 @@ int sm_setup_seccomp(void) {
       ALLOW_SYSCALL(SYS_nanosleep),
       ALLOW_SYSCALL(SYS_clock_nanosleep),
 
-      /* Randomness - used for nonce generation in client API */
+      /* Randomness */
       ALLOW_SYSCALL(SYS_getrandom),
 
-      /* Process control - used by health monitor to signal crashed services */
-      ALLOW_SYSCALL(SYS_kill),
+      /* * SYS_kill — RESTRICTED.
+       * Only permits signals needed for health monitoring.
+       */
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_kill, 0, 7),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+               offsetof(struct seccomp_data, args[1])),
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SIGTERM, 4, 0),
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SIGKILL, 3, 0),
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SIGCHLD, 2, 0),
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, 0),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+
       ALLOW_SYSCALL(SYS_wait4),
 
-      /* chmod - used by sm_socket_setup for socket permissions */
+      /* chmod - used for socket permissions */
       ALLOW_SYSCALL(SYS_chmod),
       ALLOW_SYSCALL(SYS_fchmod),
 
-      /* signalfd4 — used by sm_run() for signal-safe event loop */
+      /* signalfd4 — signal-safe event loop */
       ALLOW_SYSCALL(SYS_signalfd4),
 
-      /* glibc 2.35+: rseq registered on every thread start.
-       * Without this, pthread_create is killed immediately. */
+      /* glibc compatibility */
       ALLOW_SYSCALL(SYS_rseq),
-
-      /* clone3 — newer glibc uses clone3 instead of clone for pthread_create */
       ALLOW_SYSCALL(SYS_clone3),
-
-      /* madvise — glibc malloc uses MADV_DONTNEED on free */
       ALLOW_SYSCALL(SYS_madvise),
-
-      /* pipe2 — used by glibc internals and pthread */
       ALLOW_SYSCALL(SYS_pipe2),
-
-      /* pread64 / pwrite64 — glibc internals and log rotation */
       ALLOW_SYSCALL(SYS_pread64),
       ALLOW_SYSCALL(SYS_pwrite64),
-
-      /* getpeername — SO_PEERCRED peer credential checks */
       ALLOW_SYSCALL(SYS_getpeername),
-
-      /* uid/gid getters — verified after privilege drop */
       ALLOW_SYSCALL(SYS_getuid),
       ALLOW_SYSCALL(SYS_geteuid),
       ALLOW_SYSCALL(SYS_getgid),
       ALLOW_SYSCALL(SYS_getegid),
-
-      /* ioctl — terminal and socket operations */
       ALLOW_SYSCALL(SYS_ioctl),
-
-      /* prctl — NO_NEW_PRIVS, seccomp itself, thread name */
       ALLOW_SYSCALL(SYS_prctl),
-
-      /* tgkill — pthread_cancel and glibc internal signal delivery */
       ALLOW_SYSCALL(SYS_tgkill),
-
-      /* newfstatat — glibc stat() wrapper on newer kernels */
       ALLOW_SYSCALL(SYS_newfstatat),
 
       /* Default: kill process on any unlisted syscall */
@@ -283,7 +265,6 @@ int sm_setup_seccomp(void) {
       .filter = filter,
   };
 
-  /* Prevent privilege escalation via execve+setuid */
   if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) {
     sm_log(SM_LOG_ERROR, "security: PR_SET_NO_NEW_PRIVS failed: %s",
            strerror(errno));
@@ -305,11 +286,6 @@ int sm_setup_seccomp(void) {
  */
 
 int sm_setup_sandbox(void) {
-  /*
-   * A full chroot or mount-namespace sandbox can be added here.
-   * For the current deployment model (single host, dedicated user),
-   * privilege drop + seccomp provide sufficient containment.
-   */
   sm_log(SM_LOG_INFO, "security: sandbox: using seccomp + privilege drop");
   return 0;
 }
@@ -320,7 +296,6 @@ int sm_setup_sandbox(void) {
 uid_t sm_get_peer_uid(int fd) {
   struct ucred cred = {0};
   socklen_t len = sizeof(cred);
-
   if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0) {
     sm_log(SM_LOG_ERROR, "security: SO_PEERCRED (uid) failed: %s",
            strerror(errno));
@@ -332,7 +307,6 @@ uid_t sm_get_peer_uid(int fd) {
 gid_t sm_get_peer_gid(int fd) {
   struct ucred cred = {0};
   socklen_t len = sizeof(cred);
-
   if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0) {
     sm_log(SM_LOG_ERROR, "security: SO_PEERCRED (gid) failed: %s",
            strerror(errno));
@@ -344,7 +318,6 @@ gid_t sm_get_peer_gid(int fd) {
 pid_t sm_get_peer_pid(int fd) {
   struct ucred cred = {0};
   socklen_t len = sizeof(cred);
-
   if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0) {
     sm_log(SM_LOG_ERROR, "security: SO_PEERCRED (pid) failed: %s",
            strerror(errno));
