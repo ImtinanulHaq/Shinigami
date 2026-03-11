@@ -52,8 +52,9 @@ SM_INFRASTRUCTURE := $(SM_DIR)/infrastructure/sm_socket.c \
                      $(SM_DIR)/infrastructure/sm_connection_pool.c \
                      $(SM_DIR)/infrastructure/sm_request_id.c
 
-# Security Layer (Crypto, access control, privilege management, seccomp)
+# Security Layer (Crypto, replay protection, access control, privilege management, seccomp)
 SM_SECURITY := $(SM_DIR)/security/sm_crypto.c \
+               $(SM_DIR)/security/sm_replay.c \
                $(SM_DIR)/security/sm_rate_limit.c \
                $(SM_DIR)/security/sm_advanced_ratelimit.c \
                $(SM_DIR)/security/sm_security.c

@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <grp.h>
 #include <pwd.h>
+#include <signal.h>     /* SIGTERM, SIGKILL, SIGCHLD */
 #include <sys/socket.h>
 #include <sys/resource.h>
 #include <sys/prctl.h>
@@ -222,9 +223,47 @@ int sm_setup_seccomp(void)
         /* Randomness - used for nonce generation in client API */
         ALLOW_SYSCALL(SYS_getrandom),
 
-        /* Process control - used by health monitor to signal crashed services */
-        ALLOW_SYSCALL(SYS_kill),
+        /*
+         * SYS_kill — RESTRICTED.
+         *
+         * Only four signal values are permitted:
+         *   SIGTERM (15) — graceful shutdown of a child service
+         *   SIGKILL  (9) — force-kill an unresponsive child service
+         *   SIGCHLD (17) — send to process group / check child status
+         *   0            — existence probe (kill(pid, 0))
+         *
+         * Any other signal causes SECCOMP_RET_KILL_PROCESS immediately.
+         *
+         * BPF accumulator == syscall nr at this point (set by the first rule).
+         *
+         *  instr 1: JEQ SYS_kill jt=0 jf=7 — NOT kill? skip block entirely
+         *  instr 2: LOAD args[1]            — load signal number into acc
+         *  instr 3: JEQ SIGTERM  jt=4 jf=0 — SIGTERM  → ALLOW (skip 4→8)
+         *  instr 4: JEQ SIGKILL  jt=3 jf=0 — SIGKILL  → ALLOW (skip 3→8)
+         *  instr 5: JEQ SIGCHLD  jt=2 jf=0 — SIGCHLD  → ALLOW (skip 2→8)
+         *  instr 6: JEQ 0        jt=1 jf=0 — probe(0) → ALLOW (skip 1→8)
+         *  instr 7: RET KILL_PROCESS       — disallowed signal
+         *  instr 8: RET ALLOW              — approved signal
+         *
+         * If NOT kill (jf=7): skip instrs 2-8, land on the next filter rule.
+         * Accumulator is never corrupted for the non-kill path (args[1] is
+         * only loaded inside the block, which always terminates with RET).
+         */
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_kill,  0, 7),
+        BPF_STMT(BPF_LD  | BPF_W   | BPF_ABS,
+                 offsetof(struct seccomp_data, args[1])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SIGTERM,   4, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SIGKILL,   3, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SIGCHLD,   2, 0),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 0,          1, 0),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+
         ALLOW_SYSCALL(SYS_wait4),
+
+        /* mlock / munlock — used by sm_crypto to pin the HMAC key in RAM */
+        ALLOW_SYSCALL(SYS_mlock),
+        ALLOW_SYSCALL(SYS_munlock),
 
         /* chmod - used by sm_socket_setup for socket permissions */
         ALLOW_SYSCALL(SYS_chmod),
