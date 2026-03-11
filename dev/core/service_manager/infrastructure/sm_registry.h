@@ -5,6 +5,7 @@
  * sm_registry.h - Service registry: storage and lookup of registered services.
  */
 
+#include <stdatomic.h>
 #include <time.h>
 #include <sys/types.h>
 #include "../infrastructure/sm_protocol.h"
@@ -22,20 +23,25 @@ typedef enum {
 /* ── SERVICE ENTRY ──────────────────────────────────────────────────────────── */
 
 typedef struct {
+    /* ── Multi-byte fields: protected exclusively by registry rwlock ──── */
     char             name[SM_MAX_NAME];
     char             socket_path[SM_MAX_PATH];
     char             ring_name[SM_MAX_PATH];
+
+    /* ── Scalar fields: lock-free atomic access allowed ─────────────── */
     pid_t            pid;
     uid_t            uid;
     gid_t            gid;
-    service_status_t status;
-    time_t           last_heartbeat;
     time_t           registered_at;
-    int              restart_count;
-    time_t           last_crash_time;
-    service_tier_t   tier;              /* NEW: service priority tier */
-    int              health_status;     /* NEW: custom health check status */
-    uint64_t         request_count;     /* NEW: total requests processed */
+    service_tier_t   tier;
+    int              health_status;
+    uint64_t         request_count;
+
+    /* ── Hot-path fields: written under rdlock via atomic_store ──────── */
+    _Atomic service_status_t status;       /* set by update_status / heartbeat  */
+    _Atomic time_t           last_heartbeat; /* set by update_heartbeat          */
+    _Atomic time_t           last_crash_time; /* set on SERVICE_CRASHED           */
+    _Atomic int              restart_count;   /* incremented on SERVICE_CRASHED   */
 } service_entry_t;
 
 /* ── FUNCTIONS ──────────────────────────────────────────────────────────────── */
