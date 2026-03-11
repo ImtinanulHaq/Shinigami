@@ -423,14 +423,24 @@ start_process() {
     "${bin}" "$@" >> "${LOG_DIR}/${name}.log" 2>&1 &
     local pid=$!
     PIDS["${name}"]="${pid}"
-    # Give it 200ms then confirm it hasn't immediately crashed
-    sleep 0.2
-    if ! kill -0 "${pid}" 2>/dev/null; then
-        fail "${name} exited immediately (check ${LOG_DIR}/${name}.log)"
-        unset PIDS["${name}"]
-        return 1
+    # Give it 500ms for the process to either crash or daemonize
+    sleep 0.5
+    if kill -0 "${pid}" 2>/dev/null; then
+        # Parent still alive (non-daemonizing service) — all good
+        return 0
     fi
-    return 0
+    # Parent exited — could be a clean daemonize (double-fork) or a crash.
+    # Check if a child process with this name is now running.
+    local daemon_pid
+    daemon_pid=$(pgrep -x "${name}" 2>/dev/null | head -1 || true)
+    if [[ -n "${daemon_pid}" ]]; then
+        # Successfully daemonized — update tracked PID to the daemon child
+        PIDS["${name}"]="${daemon_pid}"
+        return 0
+    fi
+    fail "${name} exited immediately (check ${LOG_DIR}/${name}.log)"
+    unset PIDS["${name}"]
+    return 1
 }
 
 wait_for_socket() {
@@ -541,7 +551,7 @@ cmd_start() {
         --config "${CONFIG_DIR}/monitord.ini" \
         || warn "monitord failed to start (non-fatal)"
 
-    wait_for_socket "${MONITORD_SOCKET}" "monitord" 10 \
+    wait_for_socket "${MONITORD_SOCKET}" "monitord" 20 \
         || warn "monitord socket slow — continuing anyway"
 
     ok "All services started"
@@ -558,6 +568,12 @@ cmd_run() {
     if [[ "${LAUNCH_TUI}" == "true" ]]; then
         local tui_bin="${INSTALL_DIR}/sbin/mw_tui"
         if [[ -x "${tui_bin}" ]]; then
+            # Ensure monitord socket is ready before launching TUI
+            if [[ ! -S "${MONITORD_SOCKET}" ]]; then
+                log "Waiting for monitord socket before TUI..."
+                wait_for_socket "${MONITORD_SOCKET}" "monitord" 15 \
+                    || warn "monitord socket unavailable — TUI will launch anyway"
+            fi
             log "Launching TUI (Ctrl+C to stop everything)..."
             # Run TUI in foreground; suppress its exit code
             "${tui_bin}" || true
