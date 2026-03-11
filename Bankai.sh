@@ -283,6 +283,9 @@ mode = 0660
 [server]
 log_file = ${LOG_DIR}/servicemanager.log
 max_services = 32
+
+[security]
+verify_key_file = ${KEY_FILE}
 EOF
     done
     ok "servicemanager.conf"
