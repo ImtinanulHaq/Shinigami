@@ -27,141 +27,202 @@ static const char *g_log_files[] = {
     NULL,
 };
 
-/* Simple circular buffer of log lines */
-static char  g_lines[MAX_LOG_LINES][LINE_CAPACITY];
-static int   g_line_count = 0;
-static char  g_line_src[MAX_LOG_LINES][24];   /* "audio_service" etc. */
+/* Source name colour cycling */
+static const int g_src_colors[] = {
+    COLOR_PAIR_INFO,
+    COLOR_PAIR_GOOD,
+    COLOR_PAIR_WARNING,
+    COLOR_PAIR_CRITICAL,
+    COLOR_PAIR_DEFAULT,
+};
+#define SRC_COLORS_N 5
 
-static void classify_line(const char *src, const char *line,
-                           int idx, int *color_out)
+/* Circular buffer of log lines */
+static char g_lines[MAX_LOG_LINES][LINE_CAPACITY];
+static int  g_line_colors[MAX_LOG_LINES];   /* ncurses COLOR_PAIR id */
+static int  g_line_src_col[MAX_LOG_LINES];  /* colour for the source tag */
+static char g_line_src[MAX_LOG_LINES][24];
+static int  g_line_count = 0;
+
+/* ── Classify severity from line text ─────────────────────────────────── */
+static int classify_color(const char *line)
 {
-    strncpy(g_lines[idx], line, LINE_CAPACITY - 1);
-    g_lines[idx][LINE_CAPACITY - 1] = '\0';
-    strncpy(g_line_src[idx], src, 23);
-    g_line_src[idx][23] = '\0';
+    if (strstr(line, "[CRIT]")  || strstr(line, "CRITICAL") ||
+        strstr(line, "[ERROR]") || strstr(line, " ERROR")   ||
+        strstr(line, ":ERROR")  || strstr(line, "error:")   ||
+        strstr(line, "FAILED")  || strstr(line, "failed")   ||
+        strstr(line, "FAULT")   || strstr(line, "fault"))
+        return COLOR_PAIR_CRITICAL;
 
-    /* Strip trailing newline */
-    size_t l = strlen(g_lines[idx]);
-    while (l > 0 && (g_lines[idx][l-1] == '\n' || g_lines[idx][l-1] == '\r'))
-        g_lines[idx][--l] = '\0';
+    if (strstr(line, "[WARN]")  || strstr(line, " WARN")    ||
+        strstr(line, ":WARN")   || strstr(line, "warning")  ||
+        strstr(line, "WARNING") || strstr(line, "TIMEOUT")  ||
+        strstr(line, "timeout") || strstr(line, "retry"))
+        return COLOR_PAIR_WARNING;
 
-    if (strstr(line, "[ERROR]") || strstr(line, "ERROR") || strstr(line, "error"))
-        *color_out = COLOR_PAIR_CRITICAL;
-    else if (strstr(line, "[WARN]") || strstr(line, "WARN") || strstr(line, "warning"))
-        *color_out = COLOR_PAIR_WARNING;
-    else if (strstr(line, "[INFO]") || strstr(line, "info:"))
-        *color_out = COLOR_PAIR_GOOD;
-    else
-        *color_out = COLOR_PAIR_DEFAULT;
+    if (strstr(line, "[INFO]")   || strstr(line, " INFO")    ||
+        strstr(line, "started")  || strstr(line, "Starting") ||
+        strstr(line, "ready")    || strstr(line, "Ready")    ||
+        strstr(line, "OK")       || strstr(line, "success")  ||
+        strstr(line, "registered"))
+        return COLOR_PAIR_GOOD;
+
+    if (strstr(line, "[DEBUG]") || strstr(line, " DEBUG") || strstr(line, ":DEBUG"))
+        return COLOR_PAIR_DEFAULT;
+
+    return COLOR_PAIR_DEFAULT;
 }
 
-/* Read last ~(budget) lines of a log file appending to g_lines. */
-static void load_log(const char *path, int budget)
+/* ── Read last `budget` lines from a log file ─────────────────────────── */
+static void load_log(const char *path, const char *src_name, int src_col, int budget)
 {
     FILE *f = fopen(path, "r");
     if (!f) return;
 
-    /* Extract base name */
-    const char *base = strrchr(path, '/');
-    base = base ? base + 1 : path;
-    char src[24];
-    strncpy(src, base, 23);
-    src[23] = '\0';
-    /* Strip ".log" */
-    char *dot = strrchr(src, '.');
-    if (dot) *dot = '\0';
-
-    /* Collect last `budget` lines via a ring */
+    /* Ring buffer to keep last `budget` lines */
+    int cap = (budget < 64) ? budget : 64;
     char   ring[64][LINE_CAPACITY];
-    int    ring_colors[64];
+    int    ring_col[64];
     int    ring_n = 0, ring_head = 0;
     char   linebuf[LINE_CAPACITY];
-    int    cap = budget < 64 ? budget : 64;
 
     while (fgets(linebuf, sizeof(linebuf), f)) {
-        int col = COLOR_PAIR_DEFAULT;
+        /* Strip trailing newline */
+        size_t l = strlen(linebuf);
+        while (l > 0 && (linebuf[l-1] == '\n' || linebuf[l-1] == '\r'))
+            linebuf[--l] = '\0';
+        if (l == 0) continue;
+
         int idx = ring_head % cap;
-        classify_line(src, linebuf, 0, &col);
-        strncpy(ring[idx], g_lines[0], LINE_CAPACITY - 1);
-        ring_colors[idx] = col;
+        strncpy(ring[idx], linebuf, LINE_CAPACITY - 1);
+        ring[idx][LINE_CAPACITY - 1] = '\0';
+        ring_col[idx] = classify_color(linebuf);
         ring_head++;
         if (ring_n < cap) ring_n++;
     }
     fclose(f);
 
-    /* Append to g_lines in order */
+    /* Append ordered lines to global buffer */
     int start = ring_head - ring_n;
     for (int i = 0; i < ring_n && g_line_count < MAX_LOG_LINES; i++) {
         int idx = (start + i) % cap;
-        strncpy(g_lines[g_line_count], ring[idx], LINE_CAPACITY - 1);
-        strncpy(g_line_src[g_line_count], src, 23);
+        strncpy(g_lines[g_line_count],     ring[idx],  LINE_CAPACITY - 1);
+        strncpy(g_line_src[g_line_count],   src_name,   23);
+        g_line_colors[g_line_count]  = ring_col[idx];
+        g_line_src_col[g_line_count] = src_col;
         g_line_count++;
-        (void)ring_colors;
     }
 }
 
+/* ── Main render ──────────────────────────────────────────────────────── */
 void panel_logs_render(const mon_snapshot_t *s, int y, int h, int cols, int scroll)
 {
     (void)s;
     int row = y;
     const int max_row = y + h - 1;
 
-    /* Header */
+    /* ── Header ── */
     attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "-- Service Logs (live tail) ");
-    mvhline(row, 29, ACS_HLINE, cols - 31);
+    mvprintw(row, 2, "-- Service Logs ");
+    mvhline(row, 18, ACS_HLINE, cols - 20);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
     row++;
 
-    if (row <= max_row) {
-        attron(COLOR_PAIR(COLOR_PAIR_INFO));
-        mvprintw(row++, 4, "Source: %s  |  Up/Down to scroll  |  'r' to refresh", LOG_DIR);
-        attroff(COLOR_PAIR(COLOR_PAIR_INFO));
-    }
+    /* Sub-header with legend */
+    attron(COLOR_PAIR(COLOR_PAIR_INFO));
+    mvprintw(row, 4, "Dir: %-30s  ", LOG_DIR);
+    attroff(COLOR_PAIR(COLOR_PAIR_INFO));
+
+    attron(COLOR_PAIR(COLOR_PAIR_GOOD) | A_BOLD);
+    printw("INFO");
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_GOOD));
+    printw(" | ");
+    attron(COLOR_PAIR(COLOR_PAIR_WARNING) | A_BOLD);
+    printw("WARN");
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_WARNING));
+    printw(" | ");
+    attron(COLOR_PAIR(COLOR_PAIR_CRITICAL) | A_BOLD);
+    printw("ERROR");
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_CRITICAL));
+    printw("  (Up/Down: scroll  r: refresh)");
     row++;
 
-    /* Load logs */
+    /* Column header */
+    attron(A_BOLD | A_UNDERLINE);
+    mvprintw(row++, 2, "%-14s  %s", "Source", "Message");
+    attroff(A_BOLD | A_UNDERLINE);
+
+    if (row <= max_row)
+        mvhline(row++, 2, ACS_HLINE, cols - 4);
+
+    /* ── Load logs ── */
     g_line_count = 0;
-    int budget = ((max_row - row) + 1);
+    int budget = (max_row - row + 1);
     if (budget < 4) budget = 4;
-    if (budget > 48) budget = 48;
+    if (budget > 60) budget = 60;
 
-    for (int i = 0; g_log_files[i]; i++)
-        load_log(g_log_files[i], budget);
+    int src_col_idx = 0;
+    for (int i = 0; g_log_files[i]; i++) {
+        const char *path = g_log_files[i];
+        /* Extract base src name */
+        const char *base = strrchr(path, '/');
+        base = base ? base + 1 : path;
+        char src[24];
+        strncpy(src, base, 23); src[23] = '\0';
+        char *dot = strrchr(src, '.');
+        if (dot) *dot = '\0';
 
+        int sc = g_src_colors[src_col_idx % SRC_COLORS_N];
+        src_col_idx++;
+        load_log(path, src, sc, budget);
+    }
+
+    /* ── No logs message ── */
     if (g_line_count == 0) {
-        if (row <= max_row)
+        if (row <= max_row) {
+            attron(COLOR_PAIR(COLOR_PAIR_WARNING));
             mvprintw(row++, 4, "(no log files found in %s)", LOG_DIR);
+            attroff(COLOR_PAIR(COLOR_PAIR_WARNING));
+        }
         return;
     }
 
-    /* Apply scroll */
-    int total = g_line_count;
-    int start = total - (max_row - row + 1) - scroll;
+    /* ── Apply scroll ── */
+    int visible = max_row - row + 1;
+    int total   = g_line_count;
+    int start   = total - visible - scroll;
     if (start < 0) start = 0;
-    if (start >= total) start = total > 1 ? total - 1 : 0;
+    if (start >= total) start = (total > 1) ? total - 1 : 0;
 
+    /* ── Render log lines ── */
     for (int i = start; i < total && row <= max_row; i++) {
-        /* Colour code */
-        int col = COLOR_PAIR_DEFAULT;
-        const char *line = g_lines[i];
-        if (strstr(line, "ERROR") || strstr(line, "error") || strstr(line, "CRIT"))
-            col = COLOR_PAIR_CRITICAL;
-        else if (strstr(line, "WARN") || strstr(line, "warn"))
-            col = COLOR_PAIR_WARNING;
-        else if (strstr(line, "OK") || strstr(line, "ready") || strstr(line, "started"))
-            col = COLOR_PAIR_GOOD;
+        int src_c  = g_line_src_col[i];
+        int line_c = g_line_colors[i];
 
-        attron(COLOR_PAIR(COLOR_PAIR_INFO));
-        mvprintw(row, 2, "%-14s ", g_line_src[i]);
-        attroff(COLOR_PAIR(COLOR_PAIR_INFO));
+        /* Source tag */
+        attron(COLOR_PAIR(src_c) | A_BOLD);
+        mvprintw(row, 2, "%-13s", g_line_src[i]);
+        attroff(A_BOLD | COLOR_PAIR(src_c));
+        mvaddch(row, 15, '|');
+        mvaddch(row, 16, ' ');
 
-        attron(COLOR_PAIR(col));
-        /* Print up to cols-18 chars of the line */
+        /* Line text with severity colour */
+        int text_col  = line_c;
+        int text_attr = (line_c == COLOR_PAIR_CRITICAL) ? A_BOLD : A_NORMAL;
+        attron(COLOR_PAIR(text_col) | text_attr);
         int max_len = cols - 18;
         if (max_len < 1) max_len = 1;
-        mvprintw(row, 18, "%.*s", max_len, line);
-        attroff(COLOR_PAIR(col));
+        mvprintw(row, 17, "%.*s", max_len, g_lines[i]);
+        attroff(text_attr | COLOR_PAIR(text_col));
+
         row++;
     }
+
+    /* ── Scroll indicator ── */
+    if (total > visible && row <= max_row) {
+        attron(COLOR_PAIR(COLOR_PAIR_INFO));
+        mvprintw(row, 2, "-- %d/%d lines  (scroll: %d) ", total - scroll, total, scroll);
+        attroff(COLOR_PAIR(COLOR_PAIR_INFO));
+    }
 }
+

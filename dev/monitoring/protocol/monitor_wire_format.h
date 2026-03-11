@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <errno.h>
+#include <time.h>
 #include <unistd.h>
 #include <string.h>
 #include "monitor_ipc_protocol.h"
@@ -49,7 +50,15 @@ static inline ssize_t mon_write_all(int fd, const void *buf, size_t n)
 }
 
 /**
- * @brief  Read exactly @p n bytes from @p fd, retrying on EINTR.
+ * @brief  Read exactly @p n bytes from @p fd, retrying on EINTR and on
+ *         EAGAIN/EWOULDBLOCK that occur after a partial read.
+ *
+ * When the socket has SO_RCVTIMEO set (rather than O_NONBLOCK), a timeout
+ * returns EAGAIN.  If we already have some bytes we retry indefinitely so
+ * that large payloads (e.g. multi-MB snapshot structs) arrive completely.
+ * The first EAGAIN with zero bytes read is returned as MON_WIRE_ERR_AGAIN
+ * so callers can distinguish "no data yet" from "mid-stream timeout".
+ *
  * @return MON_WIRE_OK, MON_WIRE_ERR_EOF, MON_WIRE_ERR_IO, or MON_WIRE_ERR_AGAIN.
  */
 static inline int mon_read_all(int fd, void *buf, size_t n)
@@ -59,8 +68,13 @@ static inline int mon_read_all(int fd, void *buf, size_t n)
         ssize_t r = read(fd, (char *)buf + done, n - done);
         if (r < 0) {
             if (errno == EINTR) continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-                return (done == 0) ? MON_WIRE_ERR_AGAIN : MON_WIRE_ERR_IO;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (done == 0) return MON_WIRE_ERR_AGAIN; /* no data yet */
+                /* partial read — wait 1 ms then retry */
+                struct timespec sl = { 0, 1000000L };
+                nanosleep(&sl, NULL);
+                continue;
+            }
             return MON_WIRE_ERR_IO;
         }
         if (r == 0) return MON_WIRE_ERR_EOF;

@@ -24,7 +24,6 @@
 #include <time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <sys/select.h>
 #include <ncurses.h>
 
 #include "../protocol/monitor_ipc_protocol.h"
@@ -53,10 +52,16 @@ static int connect_to_monitord(const char *socket_path)
         return -1;
     }
 
-    /* Set non-blocking so recv never stalls the UI */
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags >= 0)
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    /* Bump receive buffer to 8 MB so the large snapshot struct arrives
+     * in one kernel write rather than multiple fragments. */
+    int rcvbuf = 8 * 1024 * 1024;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+
+    /* 30 ms receive timeout — keeps the UI responsive without O_NONBLOCK.
+     * mon_read_all will retry on EAGAIN if a partial read was already
+     * in progress, so the full snapshot is always received intact. */
+    struct timeval tv = { 0, 30000 };  /* 30 ms */
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     return fd;
 }
@@ -98,7 +103,7 @@ int main(int argc, char **argv)
     time_t  last_clock_render = 0;  /* Force redraw every second for clock */
 
     while (!g_stop_flag) {
-        /* ── Keyboard input (always non-blocking via timeout(0)) ── */
+        /* ── Non-blocking keyboard input (timeout(0) set in ui_engine) ── */
         int inp = ui_input_poll();
         switch (inp) {
         case UI_INPUT_QUIT:
@@ -122,7 +127,6 @@ int main(int argc, char **argv)
             break;
 
         default:
-            /* Number key direct tab jump */
             if (inp >= UI_INPUT_TAB_N && inp < UI_INPUT_TAB_N + 10) {
                 current_tab = inp - UI_INPUT_TAB_N;
                 ui_layout_set_tab(current_tab);
@@ -135,28 +139,20 @@ int main(int argc, char **argv)
             break;
         }
 
-        /* ── Non-blocking network check (30 ms window) ─────────── */
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(sock_fd, &rfds);
-        struct timeval tv = {0, 30000};   /* 30 ms */
-
-        int nready = select(sock_fd + 1, &rfds, NULL, NULL, &tv);
-        if (nready < 0 && errno == EINTR) continue;
-
-        if (nready > 0 && FD_ISSET(sock_fd, &rfds)) {
-            mon_msg_header_t hdr;
-            size_t           read_len;
-            int rc = mon_recv_msg(sock_fd, &hdr, &snapshot,
-                                  sizeof(snapshot), &read_len);
-            if (rc == MON_WIRE_OK && hdr.type == MON_MSG_SNAPSHOT_RESP) {
-                need_redraw = 1;
-            } else if (rc == MON_WIRE_ERR_EOF) {
-                /* monitord disconnected */
-                break;
-            }
-            /* MON_WIRE_ERR_AGAIN = nothing ready yet, ignore */
+        /* ── Receive snapshot — socket uses SO_RCVTIMEO=30ms, so this
+         *    blocks up to 30ms waiting for a frame, then returns
+         *    MON_WIRE_ERR_AGAIN if nothing arrived. ── */
+        mon_msg_header_t hdr;
+        size_t           read_len;
+        int rc = mon_recv_msg(sock_fd, &hdr, &snapshot,
+                              sizeof(snapshot), &read_len);
+        if (rc == MON_WIRE_OK && hdr.type == MON_MSG_SNAPSHOT_RESP) {
+            need_redraw = 1;
+        } else if (rc == MON_WIRE_ERR_EOF) {
+            /* monitord disconnected */
+            break;
         }
+        /* MON_WIRE_ERR_AGAIN = 30 ms elapsed with no data — just continue */
 
         /* Force a redraw every second so the clock in the topbar ticks */
         time_t now_s = time(NULL);
