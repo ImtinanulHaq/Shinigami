@@ -7,10 +7,20 @@
 #include "ui_engine.h"
 #include "panel_topbar.h"
 #include "panel_overview.h"
+#include "panel_services.h"
+#include "panel_hal.h"
+#include "panel_memory.h"
+#include "panel_io.h"
+#include "panel_security.h"
+#include "panel_alerts.h"
+#include "panel_logs.h"
+#include "panel_traces.h"
+#include "panel_help.h"
 #include <ncurses.h>
 #include <string.h>
 
-static int g_current_tab = 0;
+static int g_current_tab  = 0;
+static int g_scroll_offset = 0;
 
 static const char *TAB_NAMES[] = {
     "Overview",
@@ -59,38 +69,16 @@ void ui_layout_render(const mon_snapshot_t *snapshot)
     int panel_h = rows - panel_y - 1;
 
     switch (g_current_tab) {
-    case 0:  /* Overview */
-        panel_overview_render(snapshot, panel_y, panel_h, cols);
-        break;
-    case 1:  /* Services */
-        /* TODO: panel_services_render() */
-        mvprintw(panel_y, 2, "[Services panel - TODO]");
-        break;
-    case 2:  /* HAL */
-        mvprintw(panel_y, 2, "[HAL panel - TODO]");
-        break;
-    case 3:  /* Memory */
-        mvprintw(panel_y, 2, "[Memory panel - TODO]");
-        break;
-    case 4:  /* I/O */
-        mvprintw(panel_y, 2, "[I/O panel - TODO]");
-        break;
-    case 5:  /* Security */
-        mvprintw(panel_y, 2, "[Security panel - TODO]");
-        break;
-    case 6:  /* Alerts */
-        mvprintw(panel_y, 2, "[Alerts panel - TODO]");
-        break;
-    case 7:  /* Logs */
-        mvprintw(panel_y, 2, "[Logs panel - TODO]");
-        break;
-    case 8:  /* Traces */
-        mvprintw(panel_y, 2, "[Traces panel - TODO]");
-        break;
-    case 9:  /* Help */
-        mvprintw(panel_y, 2, "[Help panel - TODO]");
-        mvprintw(panel_y + 2, 2, "Keys: q=quit, Tab=next panel, Arrows=navigate");
-        break;
+    case 0:  panel_overview_render (snapshot, panel_y, panel_h, cols);                   break;
+    case 1:  panel_services_render (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+    case 2:  panel_hal_render      (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+    case 3:  panel_memory_render   (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+    case 4:  panel_io_render       (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+    case 5:  panel_security_render (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+    case 6:  panel_alerts_render   (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+    case 7:  panel_logs_render     (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+    case 8:  panel_traces_render   (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+    case 9:  panel_help_render     (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
     }
 
     /* Render bottom status bar */
@@ -103,11 +91,21 @@ void ui_layout_render(const mon_snapshot_t *snapshot)
 
 void ui_layout_set_tab(int tab_index)
 {
-    if (tab_index >= 0 && tab_index < TAB_COUNT)
-        g_current_tab = tab_index;
+    if (tab_index >= 0 && tab_index < TAB_COUNT) {
+        g_current_tab   = tab_index;
+        g_scroll_offset = 0;          /* reset scroll when switching panels */
+    }
 }
 
 int ui_layout_get_tab(void)
 {
     return g_current_tab;
+}
+
+/* direction > 0 = scroll down, < 0 = scroll up, large magnitude = page */
+void ui_layout_scroll(int direction)
+{
+    g_scroll_offset += direction;
+    if (g_scroll_offset < 0)
+        g_scroll_offset = 0;
 }

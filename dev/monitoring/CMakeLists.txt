@@ -190,6 +190,15 @@ target_sources(mw_tui_bin
         tui/ui_colors.c
         tui/panel_overview.c
         tui/panel_topbar.c
+        tui/panel_services.c
+        tui/panel_hal.c
+        tui/panel_memory.c
+        tui/panel_io.c
+        tui/panel_security.c
+        tui/panel_alerts.c
+        tui/panel_logs.c
+        tui/panel_traces.c
+        tui/panel_help.c
 )
 
 target_link_libraries(mw_tui_bin

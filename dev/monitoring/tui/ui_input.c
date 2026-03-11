@@ -39,6 +39,13 @@ int ui_input_poll(void)
     case 'R':
         return UI_INPUT_REFRESH;
 
+    /* Number keys: '1'-'9' jump to tabs 0-8, '0' jumps to tab 9 (Help) */
+    case '1': case '2': case '3': case '4': case '5':
+    case '6': case '7': case '8': case '9':
+        return UI_INPUT_TAB_N + (ch - '1');
+    case '0':
+        return UI_INPUT_TAB_N + 9;
+
     default:
         return UI_INPUT_NONE;
     }

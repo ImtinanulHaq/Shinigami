@@ -13,6 +13,8 @@
 #define UI_INPUT_PGUP     6
 #define UI_INPUT_PGDN     7
 #define UI_INPUT_REFRESH  8
+/* Direct tab jump: UI_INPUT_TAB_N + N  where N = 0..9  (key '1'=tab0...'9'=tab8, '0'=tab9) */
+#define UI_INPUT_TAB_N    100
 
 /**
  * @brief  Poll for keyboard input (non-blocking).

@@ -23,3 +23,9 @@ void ui_layout_set_tab(int tab_index);
  * @return Current tab index.
  */
 int ui_layout_get_tab(void);
+
+/**
+ * @brief  Forward scroll commands to the active panel.
+ * @param  direction  UI_INPUT_UP/DOWN/PGUP/PGDN
+ */
+void ui_layout_scroll(int direction);

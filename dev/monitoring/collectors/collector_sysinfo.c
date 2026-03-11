@@ -19,7 +19,22 @@ static int sysinfo_connect(collector_t *self, struct monitord_state *state)
 {
     (void)self;
     (void)state;
-    /* No external resource needed. Parse /proc on each tick. */
+    /* Prime CPU delta counters so the first tick gives a real short-term
+     * measurement instead of the average-since-boot (which reads ~100%
+     * on busy machines). */
+    FILE *f = fopen("/proc/stat", "r");
+    if (f) {
+        char line[256];
+        if (fgets(line, sizeof(line), f)) {
+            unsigned long long user, nice, system, idle, iowait, irq, softirq, steal;
+            if (sscanf(line, "cpu  %llu %llu %llu %llu %llu %llu %llu %llu",
+                       &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal) >= 4) {
+                prev_total = user + nice + system + idle + iowait + irq + softirq + steal;
+                prev_idle  = idle;
+            }
+        }
+        fclose(f);
+    }
     return 0;
 }
 
