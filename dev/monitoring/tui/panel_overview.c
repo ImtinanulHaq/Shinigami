@@ -13,7 +13,7 @@ void panel_overview_render(const mon_snapshot_t *snapshot, int y, int h, int col
     int row = y;
 
     /* Title */
-    mvprintw(row++, 2, "═══ System Overview ═══");
+    mvprintw(row++, 2, "=== System Overview ===");
     row++;
 
     /* Service Manager */

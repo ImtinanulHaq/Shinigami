@@ -138,6 +138,26 @@ is_built() {
     [[ -x "${INSTALL_DIR}/sbin/sm_daemon" ]]
 }
 
+# Sync any freshly-built binaries from the build tree → install/sbin.
+# Runs fast (just stat comparisons) and copies only what is newer.
+sync_binaries() {
+    local build_bin="${BUILD_DIR}/${CMAKE_PRESET}/bin/RelWithDebInfo"
+    local install_sbin="${INSTALL_DIR}/sbin"
+    local synced=0
+    local bins=(monitord mw_tui sm_daemon)
+    for svc in audio_service camera_service gpio_service sensor_service; do
+        bins+=("${svc}")
+    done
+    for bin in "${bins[@]}"; do
+        local src="${build_bin}/${bin}"
+        local dst="${install_sbin}/${bin}"
+        if [[ -f "${src}" && ( ! -f "${dst}" || "${src}" -nt "${dst}" ) ]]; then
+            cp -f "${src}" "${dst}" 2>/dev/null && synced=$(( synced + 1 )) || true
+        fi
+    done
+    [[ "${synced}" -gt 0 ]] && log "Synced ${synced} fresh binary/binaries to ${install_sbin}" || true
+}
+
 # =============================================================================
 # 4. Build
 # =============================================================================
@@ -511,6 +531,9 @@ cmd_start() {
         warn "No build found at ${INSTALL_DIR} — running build first..."
         cmd_build
     fi
+
+    # Always sync freshly-built binaries (catches incremental rebuilds without full reinstall)
+    sync_binaries
 
     # Auto-setup if directories/user missing
     if ! id "${SERVICE_USER}" &>/dev/null || [[ ! -d "${CONFIG_DIR}" ]]; then

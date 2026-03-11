@@ -21,7 +21,7 @@ static void draw_pct_bar(int y, int x, int width, float pct, int ok_col, int war
     mvaddch(y, x, '[');
     attron(COLOR_PAIR(col));
     for (int i = 0; i < inner; i++)
-        mvaddch(y, x + 1 + i, i < filled ? ACS_BLOCK : '.');
+        mvaddch(y, x + 1 + i, i < filled ? '#' : '.');
     attroff(COLOR_PAIR(col));
     mvaddch(y, x + 1 + inner, ']');
 }
@@ -35,7 +35,7 @@ void panel_memory_render(const mon_snapshot_t *s, int y, int h, int cols, int sc
 
     /* ── System memory ─────────────────────────────────────────── */
     attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "── System Memory ");
+    mvprintw(row, 2, "-- System Memory ");
     mvhline(row, 19, ACS_HLINE, cols - 21);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
     row++;
@@ -76,7 +76,7 @@ void panel_memory_render(const mon_snapshot_t *s, int y, int h, int cols, int sc
     /* ── Memory pools ──────────────────────────────────────────── */
     CHK;
     attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "── Memory Pools (%u) ", s->pool_count);
+    mvprintw(row, 2, "-- Memory Pools (%u) ", s->pool_count);
     mvhline(row, 22, ACS_HLINE, cols - 24);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
     row++;

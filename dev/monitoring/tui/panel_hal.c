@@ -47,7 +47,7 @@ void panel_hal_render(const mon_snapshot_t *s, int y, int h, int cols, int scrol
 
     /* Section header */
     attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "── HAL Devices (%u) ", s->hal_count);
+    mvprintw(row, 2, "-- HAL Devices (%u) ", s->hal_count);
     mvhline(row, 22, ACS_HLINE, cols - 24);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
     row++;

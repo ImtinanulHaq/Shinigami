@@ -33,7 +33,7 @@ static int sec_event_color(uint8_t lvl)
 static void flag_cell(int y, int x, const char *lbl, int ok)
 {
     attron(COLOR_PAIR(ok ? COLOR_PAIR_GOOD : COLOR_PAIR_CRITICAL));
-    mvprintw(y, x, " %s:%s", lbl, ok ? "✓" : "✗");
+    mvprintw(y, x, " %s:%c", lbl, ok ? 'Y' : 'N');
     attroff(COLOR_PAIR(ok ? COLOR_PAIR_GOOD : COLOR_PAIR_CRITICAL));
 }
 
@@ -45,7 +45,7 @@ void panel_security_render(const mon_snapshot_t *s, int y, int h, int cols, int 
 
     /* ── Per-service security status ─────────────────────────── */
     attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "── Per-Service Security ");
+    mvprintw(row, 2, "-- Per-Service Security ");
     mvhline(row, 26, ACS_HLINE, cols - 28);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
     row++;
@@ -96,7 +96,7 @@ void panel_security_render(const mon_snapshot_t *s, int y, int h, int cols, int 
     /* ── Aggregate tokens ────────────────────────────────────── */
     if (row + 2 <= max_row) {
         attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-        mvprintw(row, 2, "── Token Stats ");
+        mvprintw(row, 2, "-- Token Stats ");
         mvhline(row, 17, ACS_HLINE, cols - 19);
         attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
         row++;
@@ -117,7 +117,7 @@ void panel_security_render(const mon_snapshot_t *s, int y, int h, int cols, int 
 
         if (has_cg && row + 3 <= max_row) {
             attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-            mvprintw(row, 2, "── Cgroups ");
+            mvprintw(row, 2, "-- Cgroups ");
             mvhline(row, 13, ACS_HLINE, cols - 15);
             attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
             row++;
@@ -147,7 +147,7 @@ void panel_security_render(const mon_snapshot_t *s, int y, int h, int cols, int 
     /* ── Security event stream ───────────────────────────────── */
     if (row + 3 <= max_row && s->security.event_count > 0) {
         attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-        mvprintw(row, 2, "── Recent Security Events (%u) ", s->security.event_count);
+        mvprintw(row, 2, "-- Recent Security Events (%u) ", s->security.event_count);
         mvhline(row, 32 + (int)snprintf(NULL, 0, "%u", s->security.event_count),
                 ACS_HLINE, cols - 36);
         attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));

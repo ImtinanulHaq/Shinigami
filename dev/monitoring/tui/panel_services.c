@@ -13,7 +13,7 @@
 static void sec_flag(int y, int x, const char *label, int ok)
 {
     attron(COLOR_PAIR(ok ? COLOR_PAIR_GOOD : COLOR_PAIR_CRITICAL));
-    mvprintw(y, x, "%s:%s", label, ok ? "✓" : "✗");
+    mvprintw(y, x, "%s:%c", label, ok ? 'Y' : 'N');
     attroff(COLOR_PAIR(ok ? COLOR_PAIR_GOOD : COLOR_PAIR_CRITICAL));
 }
 
@@ -24,7 +24,7 @@ static void draw_bar(int y, int x, int width, float pct, int color)
     if (filled > width) filled = width;
     attron(COLOR_PAIR(color));
     for (int i = 0; i < width; i++)
-        mvaddch(y, x + i, i < filled ? ACS_BLOCK : '.');
+        mvaddch(y, x + i, i < filled ? '#' : '.');
     attroff(COLOR_PAIR(color));
 }
 
@@ -49,7 +49,7 @@ void panel_services_render(const mon_snapshot_t *s, int y, int h, int cols, int 
 
     /* Section header */
     attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "── Services (%u registered) ", s->service_count);
+    mvprintw(row, 2, "-- Services (%u registered) ", s->service_count);
     mvhline(row, 2 + 22 + (int)snprintf(NULL, 0, "%u", s->service_count),
             ACS_HLINE, cols - 26);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
@@ -145,7 +145,7 @@ void panel_services_render(const mon_snapshot_t *s, int y, int h, int cols, int 
     /* ── Watchdog summary ─────────────────────────────────────────── */
     if (row + 3 <= max_row) {
         attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-        mvprintw(row, 2, "── Watchdog ");
+        mvprintw(row, 2, "-- Watchdog ");
         mvhline(row, 14, ACS_HLINE, cols - 16);
         attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
         row++;

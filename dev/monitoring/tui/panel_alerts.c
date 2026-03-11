@@ -36,7 +36,7 @@ void panel_alerts_render(const mon_snapshot_t *s, int y, int h, int cols, int sc
 
     /* Header + summary */
     attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "── Alerts ");
+    mvprintw(row, 2, "-- Alerts ");
     mvhline(row, 12, ACS_HLINE, cols - 14);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
     row++;
@@ -60,7 +60,7 @@ void panel_alerts_render(const mon_snapshot_t *s, int y, int h, int cols, int sc
     if (s->alert_count == 0) {
         if (row <= max_row) {
             attron(COLOR_PAIR(COLOR_PAIR_GOOD));
-            mvprintw(row++, 4, "  ✓  No active alerts");
+            mvprintw(row++, 4, "  [OK]  No active alerts");
             attroff(COLOR_PAIR(COLOR_PAIR_GOOD));
         }
         return;

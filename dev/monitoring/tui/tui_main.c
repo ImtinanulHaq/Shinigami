@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <locale.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/select.h>
@@ -92,9 +93,9 @@ int main(int argc, char **argv)
 
     mon_snapshot_t snapshot;
     memset(&snapshot, 0, sizeof(snapshot));
-    int current_tab  = 0;
-    int need_redraw  = 1;   /* Render immediately with empty snapshot */
-    int got_snapshot = 0;
+    int     current_tab       = 0;
+    int     need_redraw       = 1;  /* Render immediately */
+    time_t  last_clock_render = 0;  /* Force redraw every second for clock */
 
     while (!g_stop_flag) {
         /* ── Keyboard input (always non-blocking via timeout(0)) ── */
@@ -149,8 +150,7 @@ int main(int argc, char **argv)
             int rc = mon_recv_msg(sock_fd, &hdr, &snapshot,
                                   sizeof(snapshot), &read_len);
             if (rc == MON_WIRE_OK && hdr.type == MON_MSG_SNAPSHOT_RESP) {
-                got_snapshot = 1;
-                need_redraw  = 1;
+                need_redraw = 1;
             } else if (rc == MON_WIRE_ERR_EOF) {
                 /* monitord disconnected */
                 break;
@@ -158,8 +158,15 @@ int main(int argc, char **argv)
             /* MON_WIRE_ERR_AGAIN = nothing ready yet, ignore */
         }
 
-        /* ── Render ─────────────────────────────────────────────── */
-        if (need_redraw && (got_snapshot || inp != UI_INPUT_NONE)) {
+        /* Force a redraw every second so the clock in the topbar ticks */
+        time_t now_s = time(NULL);
+        if (now_s != last_clock_render) {
+            need_redraw       = 1;
+            last_clock_render = now_s;
+        }
+
+        /* Render whenever anything changed */
+        if (need_redraw) {
             ui_layout_render(&snapshot);
             refresh();
             need_redraw = 0;

@@ -108,7 +108,7 @@ void panel_logs_render(const mon_snapshot_t *s, int y, int h, int cols, int scro
 
     /* Header */
     attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "── Service Logs (live tail) ");
+    mvprintw(row, 2, "-- Service Logs (live tail) ");
     mvhline(row, 29, ACS_HLINE, cols - 31);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
     row++;

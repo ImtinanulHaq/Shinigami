@@ -43,7 +43,7 @@ static void draw_span_bar(int y, int x, int width,
     int col = trace_status_color(status);
     attron(COLOR_PAIR(col));
     for (int i = 0; i < bar_w; i++)
-        mvaddch(y, bar_x + i, ACS_BLOCK);
+        mvaddch(y, bar_x + i, '#');
     attroff(COLOR_PAIR(col));
 }
 
@@ -54,7 +54,7 @@ void panel_traces_render(const mon_snapshot_t *s, int y, int h, int cols, int sc
 
     /* Header */
     attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "── Distributed Traces (%u stored) ", s->trace_count);
+    mvprintw(row, 2, "-- Distributed Traces (%u stored) ", s->trace_count);
     mvhline(row, 36, ACS_HLINE, cols - 38);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
     row++;

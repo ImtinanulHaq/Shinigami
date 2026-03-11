@@ -27,7 +27,7 @@ void panel_help_render(const mon_snapshot_t *s, int y, int h, int cols, int scro
     (void)scroll;
 
     attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "── Middleware Monitor — Help ");
+    mvprintw(row, 2, "-- Middleware Monitor - Help ");
     mvhline(row, 30, ACS_HLINE, cols - 32);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
     row++;

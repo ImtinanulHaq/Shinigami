@@ -12,7 +12,7 @@ static void sec_hdr(int *row, int max_row, int cols, const char *title)
 {
     if (*row > max_row) return;
     attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(*row, 2, "── %s ", title);
+    mvprintw(*row, 2, "-- %s ", title);
     int tlen = 4 + (int)strlen(title) + 1;
     mvhline(*row, 2 + tlen, ACS_HLINE, cols - tlen - 4);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
