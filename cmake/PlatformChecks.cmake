@@ -15,33 +15,84 @@ include(CheckTypeSize)
 # ---------------------------------------------------------------------------
 # io_uring probes
 # ---------------------------------------------------------------------------
-check_include_file("liburing.h"          HAVE_LIBURING_H)
-check_include_file("linux/io_uring.h"    HAVE_LINUX_IO_URING_H)
+# Step 1 — find the header directory explicitly so CMAKE_REQUIRED_INCLUDES
+# is populated *before* any check_include_file / check_symbol_exists runs.
+# cmake's default header search can miss distro-specific paths when run as root.
+find_path(_liburing_include_dir
+    NAMES liburing.h
+    PATHS /usr/include /usr/local/include /opt/include
+          ${PC_LIBURING_INCLUDE_DIRS}
+    NO_DEFAULT_PATH)
+# Fallback: let cmake search its own default paths too
+if(NOT _liburing_include_dir)
+    find_path(_liburing_include_dir NAMES liburing.h)
+endif()
 
-# find_library gives us the actual .so path — more reliable than pkg-config
-# flag strings for CMAKE_REQUIRED_LIBRARIES.
-find_library(_liburing_path NAMES uring
-    HINTS ${PC_LIBURING_LIBRARY_DIRS} /usr/lib /usr/lib64
-          /usr/lib/${CMAKE_SYSTEM_PROCESSOR}-linux-gnu)
+# Step 2 — find the library
+find_library(_liburing_path
+    NAMES uring
+    PATHS /usr/lib /usr/lib64 /usr/local/lib
+          /usr/lib/${CMAKE_SYSTEM_PROCESSOR}-linux-gnu
+          ${PC_LIBURING_LIBRARY_DIRS}
+    NO_DEFAULT_PATH)
 if(NOT _liburing_path)
-    message(FATAL_ERROR "[MW] liburing library (.so/.a) not found on disk.\n"
-        "     Install: apt-get install liburing-dev  /  pacman -S liburing")
+    find_library(_liburing_path NAMES uring)
 endif()
-set(CMAKE_REQUIRED_LIBRARIES "${_liburing_path}")
-set(CMAKE_REQUIRED_INCLUDES  "${PC_LIBURING_INCLUDE_DIRS}")
-check_symbol_exists(io_uring_queue_init    "liburing.h"  HAVE_IO_URING_QUEUE_INIT)
-check_symbol_exists(io_uring_prep_read     "liburing.h"  HAVE_IO_URING_PREP_READ)
-check_symbol_exists(io_uring_prep_poll_add "liburing.h"  HAVE_IO_URING_PREP_POLL_ADD)
-unset(CMAKE_REQUIRED_LIBRARIES)
-unset(CMAKE_REQUIRED_INCLUDES)
 
-if(NOT HAVE_LIBURING_H OR NOT HAVE_IO_URING_QUEUE_INIT)
+if(NOT _liburing_include_dir OR NOT _liburing_path)
     message(FATAL_ERROR
-        "[MW] liburing.h or io_uring API not found.\n"
-        "     Requires: Linux 5.1+ kernel + liburing 2.3+\n"
-        "     Install:  apt-get install liburing-dev\n"
-        "               or: yum install liburing-devel")
+        "[MW] liburing not found.\n"
+        "     Header dir: ${_liburing_include_dir}\n"
+        "     Library:    ${_liburing_path}\n"
+        "     Install:    pacman -S liburing  /  apt-get install liburing-dev")
 endif()
+
+message(STATUS "[MW] liburing header: ${_liburing_include_dir}")
+message(STATUS "[MW] liburing lib:    ${_liburing_path}")
+
+# Step 3 — find_path already confirmed the header exists, so set HAVE_LIBURING_H
+# directly. Rerunning check_include_file is redundant and unreliable across cmake
+# versions when the path is non-standard. Use CMAKE_REQUIRED_FLAGS for -I injection
+# into check_symbol_exists (more portable than CMAKE_REQUIRED_INCLUDES).
+# io_uring_queue_init and friends are STATIC INLINE functions defined entirely
+# in liburing.h — they are NOT exported symbols in liburing.so.
+# check_symbol_exists only searches the binary, so it always fails for these.
+# We must use check_c_source_compiles to actually compile a call to them.
+set(HAVE_LIBURING_H TRUE CACHE BOOL "liburing.h present (verified by find_path)" FORCE)
+
+check_include_file("linux/io_uring.h" HAVE_LINUX_IO_URING_H)
+
+include(CheckCSourceCompiles)
+set(CMAKE_REQUIRED_FLAGS    "-I${_liburing_include_dir}")
+set(CMAKE_REQUIRED_LIBRARIES "${_liburing_path}")
+
+check_c_source_compiles("
+#include <liburing.h>
+int main(void) {
+    struct io_uring ring;
+    io_uring_queue_init(8, &ring, 0);
+    struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
+    io_uring_prep_read(sqe, 0, NULL, 0, 0);
+    io_uring_prep_poll_add(sqe, 0, 0);
+    io_uring_queue_exit(&ring);
+    return 0;
+}
+" HAVE_IO_URING_API)
+
+unset(CMAKE_REQUIRED_FLAGS)
+unset(CMAKE_REQUIRED_LIBRARIES)
+
+if(NOT HAVE_IO_URING_API)
+    message(FATAL_ERROR
+        "[MW] liburing.h found at ${_liburing_include_dir} but failed to compile io_uring API.\n"
+        "     Requires: Linux 5.1+ kernel + liburing 2.3+\n"
+        "     Install:  pacman -S liburing  /  apt-get install liburing-dev")
+endif()
+
+# Expose individual feature flags for code that checks them
+set(HAVE_IO_URING_QUEUE_INIT    TRUE CACHE BOOL "" FORCE)
+set(HAVE_IO_URING_PREP_READ     TRUE CACHE BOOL "" FORCE)
+set(HAVE_IO_URING_PREP_POLL_ADD TRUE CACHE BOOL "" FORCE)
 
 # ---------------------------------------------------------------------------
 # POSIX / glibc probes
