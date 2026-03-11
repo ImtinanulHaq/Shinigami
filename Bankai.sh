@@ -14,7 +14,7 @@ LOG_DIR="/var/log/middleware"
 LIB_DIR="/var/lib/middleware"
 
 RUN_DIR="/tmp/middleware"
-SM_SOCKET="/run/middleware/servicemanager.sock"
+SM_SOCKET="/run/servicemanager.sock"
 
 # Standardizing on /run/middleware to avoid root-level permission issues
 MONITORD_SOCKET="/tmp/middleware_monitor.sock"
@@ -65,7 +65,15 @@ prepare_environment() {
 generate_configs() {
     log "Generating fresh configurations in $CONFIG_DIR"
 
-    # sm_daemon config (Maintained at /etc/servicemanager.conf for fallback support)
+    # Generate HMAC verify key if missing
+    local KEY_FILE="$CONFIG_DIR/middleware.key"
+    if [[ ! -f "$KEY_FILE" ]]; then
+        openssl rand -hex 32 | sudo tee "$KEY_FILE" > /dev/null
+        sudo chmod 640 "$KEY_FILE"
+        sudo chown root:servicemanager "$KEY_FILE"
+        log "Generated new HMAC key at $KEY_FILE"
+    fi
+
     cat > "/etc/servicemanager.conf" <<EOF
 [socket]
 path = $SM_SOCKET
@@ -76,24 +84,66 @@ max_services = 32
 EOF
     cp "/etc/servicemanager.conf" "$CONFIG_DIR/servicemanager.conf"
 
-    # Hardware Services
-    for svc in audio camera gpio sensor; do
-        cat > "$CONFIG_DIR/${svc}.ini" <<EOF
+    cat > "$CONFIG_DIR/audio.ini" <<EOF
+[server]
+socket_path = $SM_SOCKET
+log_file = $LOG_DIR/audio_service.log
 [servicemanager]
 socket = $SM_SOCKET
-[server]
-log_file = $LOG_DIR/${svc}_service.log
+[hardware]
+device = default
+[security]
+verify_key_file = $KEY_FILE
 EOF
-    done
 
-    # monitord config
+    cat > "$CONFIG_DIR/camera.ini" <<EOF
+[server]
+socket_path = $SM_SOCKET
+log_file = $LOG_DIR/camera_service.log
+[servicemanager]
+socket = $SM_SOCKET
+[hardware]
+device = /dev/video0
+width = 640
+height = 480
+[security]
+verify_key_file = $KEY_FILE
+EOF
+
+    cat > "$CONFIG_DIR/gpio.ini" <<EOF
+[server]
+socket_path = $SM_SOCKET
+log_file = $LOG_DIR/gpio_service.log
+[servicemanager]
+socket = $SM_SOCKET
+[hardware]
+chip = gpiochip0
+[security]
+verify_key_file = $KEY_FILE
+EOF
+
+    cat > "$CONFIG_DIR/sensor.ini" <<EOF
+[server]
+socket_path = $SM_SOCKET
+log_file = $LOG_DIR/sensor_service.log
+[servicemanager]
+socket = $SM_SOCKET
+[hardware]
+device_path = /sys/bus/iio/devices/iio:device0
+sensor_type = accelerometer
+[security]
+verify_key_file = $KEY_FILE
+EOF
+
     cat > "$CONFIG_DIR/monitord.ini" <<EOF
 [daemon]
 unix_socket_path = $MONITORD_SOCKET
 http_port = $MONITORD_HTTP_PORT
+refresh_interval_ms = 1000
 EOF
-    
-    chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR/"*
+
+    sudo chown root:servicemanager "$CONFIG_DIR/"*
+    sudo chmod 640 "$CONFIG_DIR/"*
 }
 
 # ---------------------------------------------------------------------------
@@ -154,7 +204,7 @@ main() {
     # 4. Interactive TUI
     if [[ "$LAUNCH_TUI" == "true" ]]; then
         trap shutdown_all INT TERM
-        "${INSTALL_DIR}/bin/mw_tui" || true
+        "${INSTALL_DIR}/sbin/mw_tui" || true
         shutdown_all
     else
         log "Running in background. Use Ctrl+C to stop."
