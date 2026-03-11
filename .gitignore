@@ -57,3 +57,16 @@ build/
 *.swo
 *~
 .DS_Store
+
+# CMake build directories
+build/
+bin/
+lib/
+
+# Middleware specific installation paths
+install/
+
+# Local artifacts from Bankai.sh
+*.key
+*.sock
+*.dat
