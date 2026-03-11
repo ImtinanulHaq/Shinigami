@@ -22,14 +22,9 @@ static int hal_connect(collector_t *self, struct monitord_state *state)
 static int hal_tick(collector_t *self, struct monitord_state *state)
 {
     (void)self;
-    /* TODO: Query HAL metrics, update state->services[2] */
-    state->services[2].health_score = 100;
-    strncpy(state->services[2].name, "HAL", sizeof(state->services[2].name)-1);
-    state->services[2].running      = 1;
-    state->services[2].sandbox_ok   = 1;
-    state->services[2].caps_ok      = 1;
-    state->services[2].verify_ok    = 1;
-    state->services[2].seccomp_ok   = 1;
+    (void)state;
+    /* slot[2] is owned by collector_processes (gpio_service tracking);
+     * this stub intentionally does nothing to avoid overwriting live data. */
     return 0;
 }
 

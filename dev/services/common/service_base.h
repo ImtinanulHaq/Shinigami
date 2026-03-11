@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <syslog.h>
+#include <time.h>
 
 /* ── version ──────────────────────────────────────────────────────────── */
 
@@ -113,12 +114,18 @@ typedef struct {
 #undef LOG_INFO
 #undef LOG_DEBUG
 
+/* _SVC_LOG: write to syslog AND the service log file with HH:MM:SS timestamp */
 #define _SVC_LOG(pri, tag, fmt, ...) do {                                  \
     syslog(LOG_DAEMON | (pri), "[" tag "] [%s] " fmt,                     \
            __func__, ##__VA_ARGS__);                                       \
     if (g_log_file) {                                                      \
-        fprintf(g_log_file, "[" tag "] [%s] " fmt "\n",                   \
-                __func__, ##__VA_ARGS__);                                  \
+        time_t   _t  = time(NULL);                                         \
+        struct tm _tm;                                                     \
+        localtime_r(&_t, &_tm);                                            \
+        char _ts[12];                                                      \
+        strftime(_ts, sizeof(_ts), "%H:%M:%S", &_tm);                     \
+        fprintf(g_log_file, "%s [" tag "] [%s] " fmt "\n",               \
+                _ts, __func__, ##__VA_ARGS__);                              \
         fflush(g_log_file);                                                \
     }                                                                      \
 } while (0)

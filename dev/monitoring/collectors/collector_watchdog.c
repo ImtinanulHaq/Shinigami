@@ -22,14 +22,9 @@ static int watchdog_connect(collector_t *self, struct monitord_state *state)
 static int watchdog_tick(collector_t *self, struct monitord_state *state)
 {
     (void)self;
-    /* TODO: Query watchdog metrics, update state->services[1] */
-    state->services[1].health_score = 100;
-    strncpy(state->services[1].name, "Watchdog", sizeof(state->services[1].name)-1);
-    state->services[1].running      = 1;
-    state->services[1].sandbox_ok   = 1;
-    state->services[1].caps_ok      = 1;
-    state->services[1].verify_ok    = 1;
-    state->services[1].seccomp_ok   = 1;
+    (void)state;
+    /* slot[1] is owned by collector_processes (audio_service tracking);
+     * this stub intentionally does nothing to avoid overwriting live data. */
     return 0;
 }
 
