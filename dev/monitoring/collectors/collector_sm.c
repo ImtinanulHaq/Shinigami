@@ -213,8 +213,9 @@ int collector_sm_register(void)
 {
     memset(&g_sm_collector, 0, sizeof(g_sm_collector));
     strncpy(g_sm_collector.name, "sm", sizeof(g_sm_collector.name)-1);
-    g_sm_collector.connect = sm_connect;
-    g_sm_collector.tick = sm_tick;
-    g_sm_collector.disconnect = sm_disconnect;
+    g_sm_collector.connect      = sm_connect;
+    g_sm_collector.tick         = sm_tick;
+    g_sm_collector.disconnect   = sm_disconnect;
+    g_sm_collector.interval_ms  = 1000;
     return collector_register(&g_sm_collector);
 }

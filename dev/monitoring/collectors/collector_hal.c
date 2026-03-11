@@ -44,8 +44,9 @@ int collector_hal_register(void)
 {
     memset(&g_hal_collector, 0, sizeof(g_hal_collector));
     strncpy(g_hal_collector.name, "hal", sizeof(g_hal_collector.name)-1);
-    g_hal_collector.connect = hal_connect;
-    g_hal_collector.tick = hal_tick;
-    g_hal_collector.disconnect = hal_disconnect;
+    g_hal_collector.connect      = hal_connect;
+    g_hal_collector.tick         = hal_tick;
+    g_hal_collector.disconnect   = hal_disconnect;
+    g_hal_collector.interval_ms  = 1000;
     return collector_register(&g_hal_collector);
 }

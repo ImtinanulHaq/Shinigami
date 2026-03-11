@@ -44,8 +44,9 @@ int collector_watchdog_register(void)
 {
     memset(&g_watchdog_collector, 0, sizeof(g_watchdog_collector));
     strncpy(g_watchdog_collector.name, "watchdog", sizeof(g_watchdog_collector.name)-1);
-    g_watchdog_collector.connect = watchdog_connect;
-    g_watchdog_collector.tick = watchdog_tick;
-    g_watchdog_collector.disconnect = watchdog_disconnect;
+    g_watchdog_collector.connect     = watchdog_connect;
+    g_watchdog_collector.tick        = watchdog_tick;
+    g_watchdog_collector.disconnect  = watchdog_disconnect;
+    g_watchdog_collector.interval_ms = 1000;
     return collector_register(&g_watchdog_collector);
 }

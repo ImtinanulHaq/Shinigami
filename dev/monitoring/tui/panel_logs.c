@@ -42,7 +42,36 @@ static char g_lines[MAX_LOG_LINES][LINE_CAPACITY];
 static int  g_line_colors[MAX_LOG_LINES];   /* ncurses COLOR_PAIR id */
 static int  g_line_src_col[MAX_LOG_LINES];  /* colour for the source tag */
 static char g_line_src[MAX_LOG_LINES][24];
+static char g_line_time[MAX_LOG_LINES][12]; /* "HH:MM:SS" or "--:--:--" */
 static int  g_line_count = 0;
+
+/* ── Extract HH:MM:SS from a log line (or return "--:--:--") ─────────── */
+static void extract_time(const char *line, char *out, int out_len)
+{
+    /* Match common patterns:
+     *   2026-03-11 21:13:01  → ISO datetime, grab the time part
+     *   [21:13:01]           → bracketed
+     *   21:13:01             → bare at any position
+     */
+    const char *p = line;
+    while (*p) {
+        /* Look for HH:MM:SS — two digits, colon, two digits, colon, two digits */
+        if (p[0] >= '0' && p[0] <= '2' &&
+            p[1] >= '0' && p[1] <= '9' &&
+            p[2] == ':' &&
+            p[3] >= '0' && p[3] <= '5' &&
+            p[4] >= '0' && p[4] <= '9' &&
+            p[5] == ':' &&
+            p[6] >= '0' && p[6] <= '5' &&
+            p[7] >= '0' && p[7] <= '9') {
+            snprintf(out, (size_t)out_len, "%.8s", p);
+            return;
+        }
+        p++;
+    }
+    strncpy(out, "--:--:--", (size_t)out_len - 1);
+    out[out_len - 1] = '\0';
+}
 
 /* ── Classify severity from line text ─────────────────────────────────── */
 static int classify_color(const char *line)
@@ -86,6 +115,9 @@ static void load_log(const char *path, const char *src_name, int src_col, int bu
     int    ring_n = 0, ring_head = 0;
     char   linebuf[LINE_CAPACITY];
 
+    /* Use a ring-buffer struct to preserve time per line */
+    char ring_time[64][12];
+
     while (fgets(linebuf, sizeof(linebuf), f)) {
         /* Strip trailing newline */
         size_t l = strlen(linebuf);
@@ -97,6 +129,7 @@ static void load_log(const char *path, const char *src_name, int src_col, int bu
         strncpy(ring[idx], linebuf, LINE_CAPACITY - 1);
         ring[idx][LINE_CAPACITY - 1] = '\0';
         ring_col[idx] = classify_color(linebuf);
+        extract_time(linebuf, ring_time[idx], sizeof(ring_time[idx]));
         ring_head++;
         if (ring_n < cap) ring_n++;
     }
@@ -106,8 +139,9 @@ static void load_log(const char *path, const char *src_name, int src_col, int bu
     int start = ring_head - ring_n;
     for (int i = 0; i < ring_n && g_line_count < MAX_LOG_LINES; i++) {
         int idx = (start + i) % cap;
-        strncpy(g_lines[g_line_count],     ring[idx],  LINE_CAPACITY - 1);
-        strncpy(g_line_src[g_line_count],   src_name,   23);
+        strncpy(g_lines[g_line_count],      ring[idx],       LINE_CAPACITY - 1);
+        strncpy(g_line_src[g_line_count],   src_name,        23);
+        strncpy(g_line_time[g_line_count],  ring_time[idx],  11);
         g_line_colors[g_line_count]  = ring_col[idx];
         g_line_src_col[g_line_count] = src_col;
         g_line_count++;
@@ -149,7 +183,7 @@ void panel_logs_render(const mon_snapshot_t *s, int y, int h, int cols, int scro
 
     /* Column header */
     attron(A_BOLD | A_UNDERLINE);
-    mvprintw(row++, 2, "%-14s  %s", "Source", "Message");
+    mvprintw(row++, 2, "%-8s  %-13s  %s", "Time", "Source", "Message");
     attroff(A_BOLD | A_UNDERLINE);
 
     if (row <= max_row)
@@ -199,20 +233,25 @@ void panel_logs_render(const mon_snapshot_t *s, int y, int h, int cols, int scro
         int src_c  = g_line_src_col[i];
         int line_c = g_line_colors[i];
 
+        /* Timestamp */
+        attron(COLOR_PAIR(COLOR_PAIR_DEFAULT));
+        mvprintw(row, 2, "%-8s", g_line_time[i]);
+        attroff(COLOR_PAIR(COLOR_PAIR_DEFAULT));
+        mvaddch(row, 10, '|');
+
         /* Source tag */
         attron(COLOR_PAIR(src_c) | A_BOLD);
-        mvprintw(row, 2, "%-13s", g_line_src[i]);
+        mvprintw(row, 12, "%-13s", g_line_src[i]);
         attroff(A_BOLD | COLOR_PAIR(src_c));
-        mvaddch(row, 15, '|');
-        mvaddch(row, 16, ' ');
+        mvaddch(row, 25, '|');
 
         /* Line text with severity colour */
         int text_col  = line_c;
         int text_attr = (line_c == COLOR_PAIR_CRITICAL) ? A_BOLD : A_NORMAL;
         attron(COLOR_PAIR(text_col) | text_attr);
-        int max_len = cols - 18;
+        int max_len = cols - 27;
         if (max_len < 1) max_len = 1;
-        mvprintw(row, 17, "%.*s", max_len, g_lines[i]);
+        mvprintw(row, 27, "%.*s", max_len, g_lines[i]);
         attroff(text_attr | COLOR_PAIR(text_col));
 
         row++;

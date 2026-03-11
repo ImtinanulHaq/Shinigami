@@ -44,8 +44,9 @@ int collector_services_register(void)
 {
     memset(&g_services_collector, 0, sizeof(g_services_collector));
     strncpy(g_services_collector.name, "services", sizeof(g_services_collector.name)-1);
-    g_services_collector.connect = services_connect;
-    g_services_collector.tick = services_tick;
-    g_services_collector.disconnect = services_disconnect;
+    g_services_collector.connect     = services_connect;
+    g_services_collector.tick        = services_tick;
+    g_services_collector.disconnect  = services_disconnect;
+    g_services_collector.interval_ms = 1000;
     return collector_register(&g_services_collector);
 }

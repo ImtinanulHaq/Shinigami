@@ -38,7 +38,10 @@ static const int TAB_COUNT = 10;
 
 void ui_layout_render(const mon_snapshot_t *snapshot)
 {
-    clear();
+    /* erase() clears the virtual screen without forcing a hardware clear.
+     * ncurses then diffs old vs new and only writes changed cells, which
+     * eliminates the full-screen blink that clear() causes each frame. */
+    erase();
 
     int rows, cols;
     ui_engine_get_size(&rows, &cols);

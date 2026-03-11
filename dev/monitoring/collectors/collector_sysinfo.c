@@ -130,8 +130,10 @@ int collector_sysinfo_register(void)
 {
     memset(&g_sysinfo_collector, 0, sizeof(g_sysinfo_collector));
     strncpy(g_sysinfo_collector.name, "sysinfo", sizeof(g_sysinfo_collector.name)-1);
-    g_sysinfo_collector.connect = sysinfo_connect;
-    g_sysinfo_collector.tick = sysinfo_tick;
+    g_sysinfo_collector.connect    = sysinfo_connect;
+    g_sysinfo_collector.tick       = sysinfo_tick;
     g_sysinfo_collector.disconnect = sysinfo_disconnect;
+    /* 1 second interval gives a meaningful CPU delta window */
+    g_sysinfo_collector.interval_ms = 1000;
     return collector_register(&g_sysinfo_collector);
 }
