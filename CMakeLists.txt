@@ -133,6 +133,8 @@ include(cmake/Packaging.cmake)       # CPack configuration
 # ---------------------------------------------------------------------------
 # Detect platform capabilities once — all subdirectories consume these
 # ---------------------------------------------------------------------------
+find_package(PkgConfig REQUIRED)    # needed by some Find modules below
+
 include(cmake/PlatformChecks.cmake)
 
 # ---------------------------------------------------------------------------
@@ -147,29 +149,10 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto SSL)
 add_feature_info("OpenSSL" TRUE "Version: ${OPENSSL_VERSION}")
 
-# liburing — io_uring async I/O (Linux 5.1+)
-# Use pkg-config directly — more reliable than a custom finder across distros.
-# pkg-config finds liburing 2.14 correctly on Arch/Ubuntu/Fedora.
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(PC_LIBURING REQUIRED liburing)
-# Manually set the variables our PlatformChecks and subdirs expect
-set(LibUring_VERSION      "${PC_LIBURING_VERSION}")
-set(LibUring_INCLUDE_DIRS "${PC_LIBURING_INCLUDE_DIRS}")
-set(LibUring_LIBRARIES    "${PC_LIBURING_LINK_LIBRARIES}")
-if(NOT LibUring_LIBRARIES)
-    # Fallback: pkg_check_modules LDFLAGS path
-    set(LibUring_LIBRARIES "${PC_LIBURING_LDFLAGS}")
-endif()
-# Create the imported target that subdirectories link against
-if(NOT TARGET LibUring::LibUring)
-    add_library(LibUring::LibUring INTERFACE IMPORTED)
-    set_target_properties(LibUring::LibUring PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES "${PC_LIBURING_INCLUDE_DIRS}"
-        INTERFACE_LINK_LIBRARIES      "${PC_LIBURING_LINK_LIBRARIES}"
-        INTERFACE_COMPILE_OPTIONS     "${PC_LIBURING_CFLAGS_OTHER}"
-    )
-endif()
-add_feature_info("liburing" TRUE "Version: ${LibUring_VERSION}")
+# liburing — LibUring::LibUring IMPORTED target created by PlatformChecks.cmake
+# via find_path + find_library. We query pkg-config here only for version info.
+pkg_check_modules(PC_LIBURING liburing)   # optional — not REQUIRED, PlatformChecks already validated
+add_feature_info("liburing" TRUE "Version: ${PC_LIBURING_VERSION}")
 
 # ALSA — audio HAL
 find_package(ALSA REQUIRED)
@@ -187,24 +170,8 @@ add_feature_info("libcap" TRUE "Version: ${LibCap_VERSION}")
 find_package(Curses REQUIRED)
 add_feature_info("ncurses" TRUE "TUI support enabled")
 
-# pkg-config — used by some Find modules
-find_package(PkgConfig REQUIRED)
-
-# V4L2 — camera HAL; supplied by kernel headers, no library needed
-check_include_file("linux/videodev2.h" HAVE_V4L2_HEADERS)
-if(NOT HAVE_V4L2_HEADERS)
-    message(FATAL_ERROR
-        "linux/videodev2.h not found.\n"
-        "Install kernel headers: apt-get install linux-headers-$(uname -r)\n"
-        "or: yum install kernel-headers")
-endif()
-add_feature_info("V4L2" HAVE_V4L2_HEADERS "Camera HAL support")
-
 # libbsd (optional) — safer string functions on older glibc
-find_package(PkgConfig)
-if(PkgConfig_FOUND)
-    pkg_check_modules(LIBBSD IMPORTED_TARGET libbsd)
-endif()
+pkg_check_modules(LIBBSD IMPORTED_TARGET libbsd)
 
 # ---------------------------------------------------------------------------
 # Generated header — version + build metadata, single copy for the whole tree
@@ -250,7 +217,7 @@ add_subdirectory(dev/monitoring)    # monitord daemon + TUI
 #   find_package(linux_middleware REQUIRED COMPONENTS core hal proxy)
 # ---------------------------------------------------------------------------
 install(
-    TARGETS mw_compile_opts mw_version_hdr mw_platform_checks
+    TARGETS mw_compile_opts mw_version_hdr
     EXPORT  linux_middleware_targets
 )
 

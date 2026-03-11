@@ -655,14 +655,18 @@ cmd_clean() {
           "${MONITORD_SOCKET}" /tmp/servicemanager.sock 2>/dev/null || true
     ok "Stale sockets cleared"
 
-    # ── CMake cache (always wiped — stale probe results cause silent misdetects)
-    find "${BUILD_DIR}" -name "CMakeCache.txt" -delete 2>/dev/null || true
-    find "${BUILD_DIR}" -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
+    # ── CMake cache + full build tree ─────────────────────────────────────────
+    # Always wipe CMakeCache — stale probe results silently break reconfigures.
+    # Wipe the full build/relwithdebinfo/ tree so cmake starts completely clean.
+    if [[ -d "${BUILD_DIR}" ]]; then
+        find "${BUILD_DIR}" -name "CMakeCache.txt" -delete 2>/dev/null || true
+        find "${BUILD_DIR}" -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
+    fi
     ok "CMake cache cleared"
 
     # ── Build artefacts ───────────────────────────────────────────────────────
-    if _ask "Remove build artefacts? (${BUILD_DIR} + ${INSTALL_DIR})"; then
-        rm -rf "${BUILD_DIR}" "${INSTALL_DIR}"
+    if _ask "Remove build artefacts? (${BUILD_DIR}/${CMAKE_PRESET} + ${INSTALL_DIR})"; then
+        rm -rf "${BUILD_DIR:?}/${CMAKE_PRESET}" "${INSTALL_DIR}"
         ok "Build artefacts removed"
     else
         log "Build artefacts kept"
