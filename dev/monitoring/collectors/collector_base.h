@@ -139,3 +139,21 @@ void collector_set_state(collector_t *c, collector_state_t new_state);
  * @return 0 if full sleep elapsed, 1 if stop_flag interrupted.
  */
 int collector_sleep_ms(collector_t *c, uint32_t ms);
+
+/**
+ * @brief  Return the total number of registered collectors.
+ */
+uint32_t collector_get_count(void);
+
+/**
+ * @brief  Retrieve info for all registered collectors.
+ * @param  out      Output array of collector_info_t.
+ * @param  max      Capacity of @p out.
+ * @param  live     Set to count of LIVE collectors.
+ * @param  stale    Set to count of STALE collectors.
+ * @param  offline  Set to count of OFFLINE/WAITING collectors.
+ * @return Number of entries written.
+ */
+uint32_t collector_get_info_all(collector_info_t *out, uint32_t max,
+                                uint32_t *live, uint32_t *stale,
+                                uint32_t *offline);

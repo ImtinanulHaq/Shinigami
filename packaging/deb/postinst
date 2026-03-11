@@ -1,0 +1,87 @@
+#!/bin/sh
+# =============================================================================
+# packaging/deb/postinst
+# Debian maintainer script: runs AFTER package files are installed.
+# =============================================================================
+set -e
+
+PACKAGE="linux-middleware"
+SERVICE_USER="servicemanager"
+SERVICE_GROUP="servicemanager"
+
+CONFIG_DIR="/etc/middleware"
+LOG_DIR="/var/log/middleware"
+LIB_DIR="/var/lib/middleware"
+TMPFILES_CONF="/etc/tmpfiles.d/middleware.conf"
+
+# ---------------------------------------------------------------------------
+case "$1" in
+    configure)
+        # ── System group ──────────────────────────────────────────────────
+        if ! getent group "${SERVICE_GROUP}" >/dev/null 2>&1; then
+            addgroup --system "${SERVICE_GROUP}"
+        fi
+
+        # ── System user ───────────────────────────────────────────────────
+        if ! getent passwd "${SERVICE_USER}" >/dev/null 2>&1; then
+            adduser --system \
+                    --ingroup  "${SERVICE_GROUP}" \
+                    --no-create-home \
+                    --shell    /bin/false \
+                    --gecos    "Middleware service account" \
+                    "${SERVICE_USER}"
+        fi
+
+        # ── Persistent directories ────────────────────────────────────────
+        install -d -o root         -g "${SERVICE_GROUP}" -m 750 "${CONFIG_DIR}"
+        install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 750 "${LOG_DIR}"
+        install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 700 "${LIB_DIR}"
+
+        # ── Fix per-file ownership of any pre-existing config files ───────
+        if [ -d "${CONFIG_DIR}" ]; then
+            chown root:"${SERVICE_GROUP}" "${CONFIG_DIR}"/* 2>/dev/null || true
+            chmod 640 "${CONFIG_DIR}"/* 2>/dev/null || true
+        fi
+
+        # ── /run/middleware via systemd-tmpfiles ───────────────────────────
+        printf 'd /run/middleware 0750 %s %s -\n' \
+            "${SERVICE_USER}" "${SERVICE_GROUP}" \
+            > "${TMPFILES_CONF}"
+
+        if command -v systemd-tmpfiles >/dev/null 2>&1; then
+            systemd-tmpfiles --create "${TMPFILES_CONF}" || true
+        else
+            install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 750 /run/middleware
+        fi
+
+        # ── Generate HMAC key if not present ──────────────────────────────
+        KEY_FILE="${CONFIG_DIR}/middleware.key"
+        if [ ! -f "${KEY_FILE}" ]; then
+            if command -v openssl >/dev/null 2>&1; then
+                openssl rand -hex 32 > "${KEY_FILE}"
+                chown root:"${SERVICE_GROUP}" "${KEY_FILE}"
+                chmod 640 "${KEY_FILE}"
+            else
+                echo "WARNING: openssl not found — HMAC key not generated." >&2
+                echo "         Run: sudo openssl rand -hex 32 > ${KEY_FILE}" >&2
+                echo "         Then: chown root:${SERVICE_GROUP} ${KEY_FILE} && chmod 640 ${KEY_FILE}" >&2
+            fi
+        fi
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with an unknown argument: '$1'" >&2
+        exit 1
+        ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Reload systemd if present (enables the middleware.service unit if installed)
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+fi
+
+exit 0

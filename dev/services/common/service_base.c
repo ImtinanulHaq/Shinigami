@@ -3,7 +3,9 @@
  * @brief Daemonization, PID file management, signal handlers, and logging.
  */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "service_base.h"
 
 #include <errno.h>

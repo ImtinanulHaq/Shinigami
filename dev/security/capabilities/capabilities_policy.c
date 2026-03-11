@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <syslog.h>
 #include <pthread.h>
+#include <grp.h>
 
 static const service_capabilities_t builtin_policies[] = {
     {
@@ -89,6 +90,58 @@ capabilities_config_t capabilities_policy_get_config(const char* service_name)
         config.enable_auditing = 1;
         config.target_uid = policy->recommended_uid;
         config.target_gid = policy->recommended_gid;
+
+        /* Populate supplementary hardware-access groups based on service type.
+         * This allows services to access /dev/snd (audio gid=29), /dev/video*
+         * (video gid=44) etc. after privilege drop.
+         *
+         * Group IDs are resolved dynamically via getgrnam(); if that fails
+         * (e.g. due to NSS/SSSD issues in certain service contexts) we fall
+         * back to the standard Linux base-system GIDs so the behaviour is
+         * always consistent on a typical Linux desktop/embedded system. */
+        struct { const char *name; gid_t fallback_gid; } hw_groups[4] = {
+            {NULL, 0}, {NULL, 0}, {NULL, 0}, {NULL, 0}
+        };
+
+        if (strcmp(service_name, "audio") == 0) {
+            hw_groups[0].name = "audio";   hw_groups[0].fallback_gid = 29;
+            hw_groups[1].name = "render";  hw_groups[1].fallback_gid = 992;
+        } else if (strcmp(service_name, "camera") == 0) {
+            hw_groups[0].name = "video";   hw_groups[0].fallback_gid = 44;
+            hw_groups[1].name = "render";  hw_groups[1].fallback_gid = 992;
+        } else if (strcmp(service_name, "gpio") == 0) {
+            hw_groups[0].name = "gpio";    hw_groups[0].fallback_gid = 0; /* may not exist */
+            hw_groups[1].name = "dialout"; hw_groups[1].fallback_gid = 20;
+        } else if (strcmp(service_name, "sensor") == 0) {
+            hw_groups[0].name = "plugdev"; hw_groups[0].fallback_gid = 46;
+        }
+
+        config.supplementary_gid_count = 0;
+        for (int i = 0; i < 4 && hw_groups[i].name != NULL; i++) {
+            gid_t gid = 0;
+            int found = 0;
+            struct group *grp = getgrnam(hw_groups[i].name);
+            if (grp) {
+                gid = grp->gr_gid;
+                found = 1;
+            } else if (hw_groups[i].fallback_gid != 0) {
+                gid = hw_groups[i].fallback_gid;
+                found = 1;
+                syslog(LOG_WARNING,
+                       "[cap_policy] %s: getgrnam(\"%s\") failed, using fallback gid=%d",
+                       service_name, hw_groups[i].name, (int)gid);
+            } else {
+                syslog(LOG_WARNING,
+                       "[cap_policy] %s: group '%s' not found, skipping",
+                       service_name, hw_groups[i].name);
+            }
+            if (found && config.supplementary_gid_count < 8) {
+                config.supplementary_gids[config.supplementary_gid_count++] = gid;
+                syslog(LOG_INFO, "[cap_policy] %s: supplementary group %s(%d)",
+                       service_name, hw_groups[i].name, (int)gid);
+            }
+        }
+
     } else {
 
         syslog(LOG_WARNING, "[cap_policy] Unknown service '%s', using minimal privileges",

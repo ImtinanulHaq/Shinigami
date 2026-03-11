@@ -222,13 +222,12 @@ uint32_t collector_get_info_all(collector_info_t *out, uint32_t max,
                                 uint32_t *offline) {
   uint32_t n = 0;
   uint32_t l = 0, s = 0, o = 0;
-  uint64_t now = monotonic_ms();
 
   for (uint32_t i = 0; i < g_collector_count && n < max; i++) {
     collector_t *c = g_collectors[i];
     collector_info_t *ci = &out[n++];
 
-    strncpy(ci->name, c->name, sizeof(ci->name) - 1);
+    snprintf(ci->name, sizeof(ci->name), "%s", c->name);
     ci->state = c->state;
     ci->interval_ms = c->interval_ms;
     ci->last_update_ms = c->last_update_ms;

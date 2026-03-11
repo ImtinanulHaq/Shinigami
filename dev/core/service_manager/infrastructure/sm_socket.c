@@ -11,6 +11,7 @@
  */
 
 #include "../infrastructure/sm_socket.h"
+#include "../lifecycle/sm_config.h"
 #include "../observability/sm_logging.h"
 
 #include <stdio.h>
@@ -26,6 +27,7 @@
 
 static int server_fd = -1;
 static const char* g_socket_path = NULL;
+static char g_config_socket_path[256] = {0};
 
 /* ── PUBLIC FUNCTIONS ───────────────────────────────────────────────────────── */
 
@@ -33,9 +35,18 @@ int sm_socket_setup(void)
 {
     struct sockaddr_un addr;
     int                flags;
+
+    /* Prefer the path from config; fall back to compiled-in defaults */
+    const sm_config_t *cfg = sm_config_get();
+    if (cfg && cfg->socket_path[0] != '\0') {
+        strncpy(g_config_socket_path, cfg->socket_path, sizeof(g_config_socket_path) - 1);
+    } else {
+        strncpy(g_config_socket_path, SM_SOCKET_PATH, sizeof(g_config_socket_path) - 1);
+    }
+
     const char* socket_paths[] = {
-        SM_SOCKET_PATH,                          /* /run/servicemanager.sock */
-        "/tmp/servicemanager.sock",              /* fallback to /tmp */
+        g_config_socket_path,                    /* from config (or SM_SOCKET_PATH default) */
+        "/tmp/servicemanager.sock",              /* fallback to /tmp if runtime dir not writable */
         NULL
     };
     int path_idx = 0;

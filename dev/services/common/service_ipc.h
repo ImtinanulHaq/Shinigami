@@ -22,7 +22,7 @@
 
 /* ── SM socket defaults ───────────────────────────────────────────────── */
 
-#define SM_SOCKET_PATH          "/tmp/servicemanager.sock"
+#define SM_SOCKET_PATH          "/run/middleware/servicemanager.sock"
 #define SM_CONNECT_RETRIES      3
 #define SM_CONNECT_RETRY_DELAY  2   /* seconds between retries */
 #define SM_REPLY_TIMEOUT_SEC    5

@@ -14,7 +14,9 @@
  * is overridden by the env var AUDIO_SERVICE_SERVER_SOCKET_PATH.
  */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "service_config.h"
 #include "service_base.h"
 
@@ -124,6 +126,7 @@ static int parse_file(service_config_t *cfg, FILE *fp)
         cfg_entry_t *e = find_entry(cfg, cur_section, key_buf);
         if (e) {
             strncpy(e->value, val_buf, CFG_MAX_VALUE_LEN - 1);
+            e->value[CFG_MAX_VALUE_LEN - 1] = '\0';
         } else {
             if (cfg->count >= CFG_MAX_SECTIONS * CFG_MAX_KEYS) {
                 LOG_WARN("config: entry limit reached, skipping %s.%s",
@@ -131,9 +134,9 @@ static int parse_file(service_config_t *cfg, FILE *fp)
                 continue;
             }
             e = &cfg->entries[cfg->count++];
-            strncpy(e->section, cur_section, CFG_MAX_KEY_LEN - 1);
-            strncpy(e->key,     key_buf,     CFG_MAX_KEY_LEN - 1);
-            strncpy(e->value,   val_buf,     CFG_MAX_VALUE_LEN - 1);
+            snprintf(e->section, CFG_MAX_KEY_LEN,   "%s", cur_section);
+            snprintf(e->key,     CFG_MAX_KEY_LEN,   "%s", key_buf);
+            snprintf(e->value,   CFG_MAX_VALUE_LEN, "%s", val_buf);
         }
     }
     return 0;
@@ -202,8 +205,8 @@ int service_config_reload(service_config_t *cfg)
     if (!cfg) return -1;
     /* Preserve the metadata, clear entries */
     char path[256], prefix[64];
-    strncpy(path,   cfg->path,       sizeof(path)   - 1);
-    strncpy(prefix, cfg->svc_prefix, sizeof(prefix) - 1);
+    snprintf(path,   sizeof(path),   "%s", cfg->path);
+    snprintf(prefix, sizeof(prefix), "%s", cfg->svc_prefix);
     return service_config_load(cfg, path, prefix);
 }
 

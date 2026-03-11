@@ -59,7 +59,13 @@ int seccomp_apply_config(const seccomp_config_t* config)
         seccomp_core_setup_device_fds(config->allowed_devices, config->device_count);
 
     scmp_filter_ctx ctx = seccomp_init(
-        seccomp_core_is_monitoring_enabled() ? SCMP_ACT_TRAP : SCMP_ACT_KILL);
+        seccomp_core_is_monitoring_enabled() ? SCMP_ACT_TRAP :
+#ifdef SCMP_ACT_LOG
+        SCMP_ACT_LOG   /* Log unknown syscalls instead of killing — allowlist is permissive baseline */
+#else
+        SCMP_ACT_KILL
+#endif
+        );
     if (!ctx) return -1;
 
     if (seccomp_core_validate_architecture(ctx) < 0) {

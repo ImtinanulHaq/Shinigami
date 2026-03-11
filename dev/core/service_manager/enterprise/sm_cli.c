@@ -39,9 +39,9 @@
 #define C_WHITE    "\033[1;37m"
 
 /* ── Paths ───────────────────────────────────────────────────────────────────── */
-#define SM_SOCKET_PRIMARY  "/run/servicemanager.sock"
+#define SM_SOCKET_PRIMARY  "/run/middleware/servicemanager.sock"
 #define SM_SOCKET_FALLBACK "/tmp/servicemanager.sock"
-#define SM_LOG_FILE        "/var/log/servicemanager.log"
+#define SM_LOG_FILE        "/var/log/middleware/servicemanager.log"
 #define SM_AUDIT_LOG_FILE  "/var/log/servicemanager-audit.log"
 
 /* ── Tokeniser limits ────────────────────────────────────────────────────────── */

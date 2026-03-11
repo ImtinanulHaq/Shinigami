@@ -12,6 +12,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <sys/types.h>
 #include "../protocol/monitor_ipc_protocol.h"
 
 /**
@@ -36,3 +37,13 @@ uint32_t prometheus_render(const mon_snapshot_t *snap,
  */
 uint32_t health_json_render(const mon_snapshot_t *snap,
                             char *buf, uint32_t bufsiz);
+
+/**
+ * @brief  Render the /health JSON endpoint body (full path variant).
+ * @param  snap      Current snapshot.
+ * @param  buf       Output buffer.
+ * @param  bufsiz    Size of buf.
+ * @return Bytes written, or -1 if buf too small.
+ */
+ssize_t metrics_health_json_render(const mon_snapshot_t *snap,
+                                   char *buf, size_t bufsiz);

@@ -8,30 +8,12 @@
 #include <string.h>
 #include <stdarg.h>
 
-/* Helper to format alert messages */
-static void format_msg(char *buf, size_t size, const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(buf, size, fmt, args);
-    va_end(args);
-}
-
-/* Helper wrapper for alert_fire with simpler interface */
-static void fire_alert(alert_state_t *st, alert_severity_t sev,
-                        const char *component, const char *condition,
-                        const char *current, const char *thresh,
-                        const char *suggestion, uint64_t ts)
-{
-    alert_fire(st, sev, component, condition, current, thresh, suggestion, ts);
-}
 
 uint32_t alert_rules_evaluate(const mon_snapshot_t *snapshot,
                                 alert_state_t *alert_st,
                                 uint64_t timestamp)
 {
     uint32_t alerts_fired = 0;
-    char msg[256];
 
     /* ═══ CRITICAL RULES ═══════════════════════════════════════════════════ */
 
@@ -90,9 +72,9 @@ uint32_t alert_rules_evaluate(const mon_snapshot_t *snapshot,
     /* Rule 5: io_uring CQ overflow - check actual urings */
     for (uint32_t i = 0; i < URING_MAX; i++) {
         const uring_metrics_t *u = &snapshot->urings[i];
-        if (u->name[0] && u->cq_fill_pct > 95.0) {
+        if (u->name[0] && (double)u->cq_fill_pct > 95.0) {
             char current[32], thresh[32];
-            snprintf(current, sizeof(current), "%.1f%%", u->cq_fill_pct);
+            snprintf(current, sizeof(current), "%.1f%%", (double)u->cq_fill_pct);
             snprintf(thresh, sizeof(thresh), "95%%");
             alert_fire(alert_st, ALERT_SEV_CRIT, u->name, "io_uring CQ near full",
                        current, thresh, "Increase CQ depth or process completions faster", timestamp);
@@ -137,9 +119,9 @@ uint32_t alert_rules_evaluate(const mon_snapshot_t *snapshot,
     }
 
     /* Rule 9: High CPU usage */
-    if (snapshot->sysinfo.cpu_total_pct > 80.0) {
+    if ((double)snapshot->sysinfo.cpu_total_pct > 80.0) {
         char current[32], thresh[32];
-        snprintf(current, sizeof(current), "%.1f%%", snapshot->sysinfo.cpu_total_pct);
+        snprintf(current, sizeof(current), "%.1f%%", (double)snapshot->sysinfo.cpu_total_pct);
         snprintf(thresh, sizeof(thresh), "80%%");
         alert_fire(alert_st, ALERT_SEV_WARN, "system", "High CPU",
                    current, thresh, "Identify CPU-intensive processes", timestamp);

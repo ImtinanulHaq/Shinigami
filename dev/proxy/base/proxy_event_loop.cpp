@@ -104,7 +104,8 @@ void ProxyEventLoop::run(int timeout_ms) {
             if (fd == wake_fd_) {
                 // Drain the eventfd to re-arm it.
                 uint64_t val;
-                ::read(wake_fd_, &val, sizeof(val));
+                // GCC warns on unchecked read/write even with (void), use local var
+                [[maybe_unused]] ssize_t rd = ::read(wake_fd_, &val, sizeof(val));  // best-effort drain
                 running_.store(false, std::memory_order_release);
                 break;
             }
@@ -124,7 +125,7 @@ void ProxyEventLoop::run(int timeout_ms) {
 void ProxyEventLoop::stop() noexcept {
     if (wake_fd_ >= 0) {
         uint64_t val = 1;
-        ::write(wake_fd_, &val, sizeof(val));
+        [[maybe_unused]] ssize_t wr = ::write(wake_fd_, &val, sizeof(val));  // best-effort wakeup
     }
     running_.store(false, std::memory_order_release);
 }

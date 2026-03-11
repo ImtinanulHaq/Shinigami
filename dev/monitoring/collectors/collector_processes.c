@@ -26,7 +26,7 @@ static pid_t find_process_by_name(const char *name) {
         if (entry->d_name[0] < '0' || entry->d_name[0] > '9')
             continue;
             
-        char cmdline_path[256];
+        char cmdline_path[280];
         snprintf(cmdline_path, sizeof(cmdline_path), "/proc/%s/cmdline", entry->d_name);
         
         FILE *f = fopen(cmdline_path, "r");

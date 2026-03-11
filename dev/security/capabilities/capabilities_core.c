@@ -172,9 +172,21 @@ int capabilities_core_apply_config(const capabilities_config_t *config) {
 
     if (current_uid == 0) {
 
-      if (setgroups(0, NULL) < 0) {
-        syslog(LOG_ERR, "[cap_core] setgroups failed: %s", strerror(errno));
-        return -1;
+      /* Set supplementary groups to hardware-access groups (audio, video, etc.)
+       * instead of clearing them entirely.  This allows the service to open
+       * hardware devices that require group membership (e.g. /dev/snd, /dev/video). */
+      if (config->supplementary_gid_count > 0) {
+        if (setgroups((size_t)config->supplementary_gid_count,
+                      config->supplementary_gids) < 0) {
+          syslog(LOG_ERR, "[cap_core] setgroups (supplementary) failed: %s",
+                 strerror(errno));
+          return -1;
+        }
+      } else {
+        if (setgroups(0, NULL) < 0) {
+          syslog(LOG_ERR, "[cap_core] setgroups failed: %s", strerror(errno));
+          return -1;
+        }
       }
 
       if (setgid(config->target_gid) < 0) {

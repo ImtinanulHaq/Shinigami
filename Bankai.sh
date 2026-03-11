@@ -60,12 +60,11 @@ SOURCE_DIR="${SCRIPT_DIR}"
 CONFIG_DIR="/etc/middleware"
 LOG_DIR="/var/log/middleware"
 LIB_DIR="/var/lib/middleware"
-RUN_DIR="/run/middleware"
 TMPFILES_CONF="/etc/tmpfiles.d/middleware.conf"
 
-# sm_daemon binds these in order — first one that succeeds wins.
-# Real socket path (what sm_daemon actually creates):
-SM_SOCKET="/run/servicemanager.sock"
+# sm_daemon binds to /run/middleware/servicemanager.sock (owned by SERVICE_USER).
+# That directory is created by cmd_setup and survives via systemd-tmpfiles.
+SM_SOCKET="/run/middleware/servicemanager.sock"
 # Monitord socket:
 MONITORD_SOCKET="/tmp/middleware_monitor.sock"
 MONITORD_HTTP_PORT=9090
@@ -73,7 +72,6 @@ MONITORD_HTTP_PORT=9090
 SERVICE_USER="servicemanager"
 LAUNCH_TUI=true
 
-PIDFILE_DIR="/run/middleware"
 declare -A PIDS
 SHUTDOWN_IN_PROGRESS=false
 
@@ -291,6 +289,13 @@ EOF
     ok "servicemanager.conf"
 
     # ── Audio ─────────────────────────────────────────────────────────────────
+    local audio_skip=0
+    # Check for ALSA audio device
+    local alsa_dev="hw:0,0"
+    if ! aplay -l &>/dev/null 2>&1 || ! aplay -l 2>/dev/null | grep -q 'card'; then
+        audio_skip=1
+        log "No audio hardware found — skip_hal_init=1 for audio_service"
+    fi
     cat > "${CONFIG_DIR}/audio.ini" <<EOF
 [server]
 socket_path = ${SM_SOCKET}
@@ -300,14 +305,18 @@ log_file = ${LOG_DIR}/audio_service.log
 socket = ${SM_SOCKET}
 
 [hardware]
-device = default
+device = ${alsa_dev}
 
 [security]
 verify_key_file = ${KEY_FILE}
+skip_hal_init = ${audio_skip}
+skip_sandbox = 1
 EOF
     ok "audio.ini"
 
     # ── Camera ────────────────────────────────────────────────────────────────
+    local camera_skip=0
+    [[ ! -e /dev/video0 ]] && camera_skip=1 && log "No camera /dev/video0 — skip_hal_init=1 for camera_service"
     cat > "${CONFIG_DIR}/camera.ini" <<EOF
 [server]
 socket_path = ${SM_SOCKET}
@@ -323,10 +332,24 @@ height = 480
 
 [security]
 verify_key_file = ${KEY_FILE}
+skip_hal_init = ${camera_skip}
+skip_sandbox = 1
 EOF
     ok "camera.ini"
 
     # ── GPIO ──────────────────────────────────────────────────────────────────
+    local gpio_skip=0
+    if [[ ! -e /dev/gpiochip0 ]]; then
+        gpio_skip=1
+        log "No /dev/gpiochip0 — skip_hal_init=1 for gpio_service"
+    else
+        # Check if device has group/other access; if root-only (0600) skip HAL init
+        local _gperm; _gperm=$(stat -c '%a' /dev/gpiochip0 2>/dev/null || echo "600")
+        if [[ "${_gperm: -2:1}" == "0" && "${_gperm: -1:1}" == "0" ]]; then
+            gpio_skip=1
+            log "/dev/gpiochip0 is root-only (${_gperm}) — skip_hal_init=1 for gpio_service"
+        fi
+    fi
     cat > "${CONFIG_DIR}/gpio.ini" <<EOF
 [server]
 socket_path = ${SM_SOCKET}
@@ -340,11 +363,15 @@ chip = gpiochip0
 
 [security]
 verify_key_file = ${KEY_FILE}
+skip_hal_init = ${gpio_skip}
+skip_sandbox = 1
 EOF
     ok "gpio.ini"
 
     # ── Sensor ────────────────────────────────────────────────────────────────
     # Valid sensor_type values: accel | gyro | mag  (not "accelerometer")
+    local sensor_skip=0
+    [[ ! -e /sys/bus/iio/devices/iio:device0 ]] && sensor_skip=1 && log "No IIO sensor device — skip_hal_init=1 for sensor_service"
     cat > "${CONFIG_DIR}/sensor.ini" <<EOF
 [server]
 socket_path = ${SM_SOCKET}
@@ -359,6 +386,8 @@ sensor_type = accel
 
 [security]
 verify_key_file = ${KEY_FILE}
+skip_hal_init = ${sensor_skip}
+skip_sandbox = 1
 EOF
     ok "sensor.ini"
 
@@ -366,6 +395,7 @@ EOF
     cat > "${CONFIG_DIR}/monitord.ini" <<EOF
 [daemon]
 unix_socket_path = ${MONITORD_SOCKET}
+sm_socket_path = ${SM_SOCKET}
 http_port = ${MONITORD_HTTP_PORT}
 refresh_interval_ms = 1000
 EOF
@@ -390,7 +420,7 @@ start_process() {
         return 1
     fi
     log "Starting ${name}..."
-    "${bin}" "$@" &
+    "${bin}" "$@" >> "${LOG_DIR}/${name}.log" 2>&1 &
     local pid=$!
     PIDS["${name}"]="${pid}"
     # Give it 200ms then confirm it hasn't immediately crashed
@@ -409,7 +439,7 @@ wait_for_socket() {
     while [[ ! -S "${path}" ]]; do
         sleep 0.5
         elapsed=$(( elapsed + 1 ))
-        if (( elapsed > timeout * 2 )); then
+        if (( elapsed >= timeout * 2 )); then
             fail "${label} socket never appeared at ${path}"
             return 1
         fi
@@ -489,8 +519,6 @@ cmd_start() {
     # Remove any stale sockets from previous runs
     rm -f "${SM_SOCKET}" /run/servicemanager.sock "${MONITORD_SOCKET}" /tmp/servicemanager.sock 2>/dev/null || true
 
-    trap shutdown_all INT TERM EXIT
-
     # 1. Service Manager
     start_process "sm_daemon" \
         "${INSTALL_DIR}/sbin/sm_daemon" \
@@ -521,6 +549,8 @@ cmd_start() {
 }
 
 cmd_run() {
+    trap shutdown_all INT TERM EXIT
+
     cmd_start
 
     hdr "── Interactive TUI ────────────────────────────────────────────────────"
@@ -543,8 +573,6 @@ cmd_run() {
         log "Prometheus metrics: http://localhost:${MONITORD_HTTP_PORT}/metrics"
         wait "${PIDS[sm_daemon]:-}" 2>/dev/null || true
     fi
-
-    shutdown_all
 }
 
 cmd_stop() {
@@ -669,7 +697,7 @@ cmd_clean() {
 
     # ── Build artefacts ───────────────────────────────────────────────────────
     if _ask "Remove build artefacts? (${BUILD_DIR}/${CMAKE_PRESET} + ${INSTALL_DIR})"; then
-        rm -rf "${BUILD_DIR:?}/${CMAKE_PRESET}" "${INSTALL_DIR}"
+        rm -rf "${BUILD_DIR:?}/${CMAKE_PRESET}" "${INSTALL_DIR:?}"
         ok "Build artefacts removed"
     else
         log "Build artefacts kept"

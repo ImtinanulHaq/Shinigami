@@ -232,7 +232,13 @@ int seccomp_core_apply_common(scmp_filter_ctx ctx) {
   seccomp_core_allow(ctx, SCMP_SYS(exit));
   seccomp_core_allow(ctx, SCMP_SYS(exit_group));
 
-  /* --- ADDED: Basic IPC and Syslog support for ALL services --- */
+  /* --- Hardware device control: allow ioctl unconditionally.
+   * Libraries (ALSA, V4L2, gpiod) open their own fds internally, so
+   * per-fd filtering cannot be applied portably here.  All services are
+   * still restricted to the minimal syscall set configured above. */
+  seccomp_core_allow(ctx, SCMP_SYS(ioctl));
+
+  /* --- IPC and sockets (Unix domain sockets for SM communication) --- */
   seccomp_core_allow(ctx, SCMP_SYS(socket));
   seccomp_core_allow(ctx, SCMP_SYS(connect));
   seccomp_core_allow(ctx, SCMP_SYS(send));
@@ -241,7 +247,202 @@ int seccomp_core_apply_common(scmp_filter_ctx ctx) {
   seccomp_core_allow(ctx, SCMP_SYS(recvfrom));
   seccomp_core_allow(ctx, SCMP_SYS(sendmsg));
   seccomp_core_allow(ctx, SCMP_SYS(recvmsg));
-  /* ------------------------------------------------------------ */
+  seccomp_core_allow(ctx, SCMP_SYS(setsockopt));
+  seccomp_core_allow(ctx, SCMP_SYS(getsockopt));
+  seccomp_core_allow(ctx, SCMP_SYS(getsockname));
+  seccomp_core_allow(ctx, SCMP_SYS(shutdown));
+
+  /* --- File system operations needed by ALSA, V4L2, gpiod, libc --- */
+  seccomp_core_allow(ctx, SCMP_SYS(lstat));
+  seccomp_core_allow(ctx, SCMP_SYS(newfstatat));  /* fstatat / newfstatat */
+  seccomp_core_allow(ctx, SCMP_SYS(access));
+  seccomp_core_allow(ctx, SCMP_SYS(faccessat));
+  seccomp_core_allow(ctx, SCMP_SYS(readlink));
+  seccomp_core_allow(ctx, SCMP_SYS(readlinkat));
+  seccomp_core_allow(ctx, SCMP_SYS(unlink));      /* shm_unlink for ring buffers */
+  seccomp_core_allow(ctx, SCMP_SYS(unlinkat));
+  seccomp_core_allow(ctx, SCMP_SYS(mkdir));
+  seccomp_core_allow(ctx, SCMP_SYS(mkdirat));
+  seccomp_core_allow(ctx, SCMP_SYS(rmdir));
+  seccomp_core_allow(ctx, SCMP_SYS(rename));
+  seccomp_core_allow(ctx, SCMP_SYS(renameat));
+  seccomp_core_allow(ctx, SCMP_SYS(fcntl));
+  seccomp_core_allow(ctx, SCMP_SYS(dup));
+  seccomp_core_allow(ctx, SCMP_SYS(dup2));
+  seccomp_core_allow(ctx, SCMP_SYS(dup3));
+  seccomp_core_allow(ctx, SCMP_SYS(pipe2));
+  seccomp_core_allow(ctx, SCMP_SYS(pread64));
+  seccomp_core_allow(ctx, SCMP_SYS(pwrite64));
+  seccomp_core_allow(ctx, SCMP_SYS(readv));
+  seccomp_core_allow(ctx, SCMP_SYS(writev));
+  seccomp_core_allow(ctx, SCMP_SYS(getdents64));
+  seccomp_core_allow(ctx, SCMP_SYS(getcwd));
+  seccomp_core_allow(ctx, SCMP_SYS(chdir));
+  seccomp_core_allow(ctx, SCMP_SYS(fchdir));
+  seccomp_core_allow(ctx, SCMP_SYS(chmod));
+  seccomp_core_allow(ctx, SCMP_SYS(fchmod));
+  seccomp_core_allow(ctx, SCMP_SYS(fchmodat));
+  seccomp_core_allow(ctx, SCMP_SYS(chown));
+  seccomp_core_allow(ctx, SCMP_SYS(fchown));
+  seccomp_core_allow(ctx, SCMP_SYS(lchown));
+  seccomp_core_allow(ctx, SCMP_SYS(fchownat));
+  seccomp_core_allow(ctx, SCMP_SYS(truncate));
+  seccomp_core_allow(ctx, SCMP_SYS(sync));
+  seccomp_core_allow(ctx, SCMP_SYS(fsync));
+  seccomp_core_allow(ctx, SCMP_SYS(fdatasync));
+  seccomp_core_allow(ctx, SCMP_SYS(inotify_init1));
+  seccomp_core_allow(ctx, SCMP_SYS(inotify_add_watch));
+  seccomp_core_allow(ctx, SCMP_SYS(inotify_rm_watch));
+
+  /* --- I/O multiplexing --- */
+  seccomp_core_allow(ctx, SCMP_SYS(poll));
+  seccomp_core_allow(ctx, SCMP_SYS(ppoll));
+  seccomp_core_allow(ctx, SCMP_SYS(select));
+  seccomp_core_allow(ctx, SCMP_SYS(pselect6));
+
+  /* --- Thread and process management --- */
+  seccomp_core_allow(ctx, SCMP_SYS(clone));
+  seccomp_core_allow(ctx, SCMP_SYS(clone3));
+  seccomp_core_allow(ctx, SCMP_SYS(prctl));
+  seccomp_core_allow(ctx, SCMP_SYS(arch_prctl));
+  seccomp_core_allow(ctx, SCMP_SYS(set_tid_address));
+  seccomp_core_allow(ctx, SCMP_SYS(tgkill));
+  seccomp_core_allow(ctx, SCMP_SYS(kill));
+  seccomp_core_allow(ctx, SCMP_SYS(wait4));
+  seccomp_core_allow(ctx, SCMP_SYS(set_robust_list));
+  seccomp_core_allow(ctx, SCMP_SYS(get_robust_list));
+
+  /* --- Identity/credentials (used by glibc, security checks) --- */
+  seccomp_core_allow(ctx, SCMP_SYS(getuid));
+  seccomp_core_allow(ctx, SCMP_SYS(geteuid));
+  seccomp_core_allow(ctx, SCMP_SYS(getgid));
+  seccomp_core_allow(ctx, SCMP_SYS(getegid));
+  seccomp_core_allow(ctx, SCMP_SYS(getgroups));
+  seccomp_core_allow(ctx, SCMP_SYS(capget));
+  seccomp_core_allow(ctx, SCMP_SYS(capset));
+
+  /* --- Memory management extensions --- */
+  seccomp_core_allow(ctx, SCMP_SYS(madvise));
+  seccomp_core_allow(ctx, SCMP_SYS(msync));
+  seccomp_core_allow(ctx, SCMP_SYS(mremap));
+  seccomp_core_allow(ctx, SCMP_SYS(mlock));
+  seccomp_core_allow(ctx, SCMP_SYS(munlock));
+  seccomp_core_allow(ctx, SCMP_SYS(mlock2));
+  seccomp_core_allow(ctx, SCMP_SYS(mlockall));
+  seccomp_core_allow(ctx, SCMP_SYS(munlockall));
+  seccomp_core_allow(ctx, SCMP_SYS(mincore));
+
+  /* --- Shared memory (POSIX shm for ring buffers) --- */
+  seccomp_core_allow(ctx, SCMP_SYS(shmget));
+  seccomp_core_allow(ctx, SCMP_SYS(shmat));
+  seccomp_core_allow(ctx, SCMP_SYS(shmctl));
+  seccomp_core_allow(ctx, SCMP_SYS(shmdt));
+
+  /* --- Timers --- */
+  seccomp_core_allow(ctx, SCMP_SYS(timerfd_create));
+  seccomp_core_allow(ctx, SCMP_SYS(timerfd_settime));
+  seccomp_core_allow(ctx, SCMP_SYS(timerfd_gettime));
+  seccomp_core_allow(ctx, SCMP_SYS(timer_create));
+  seccomp_core_allow(ctx, SCMP_SYS(timer_settime));
+  seccomp_core_allow(ctx, SCMP_SYS(timer_gettime));
+  seccomp_core_allow(ctx, SCMP_SYS(timer_delete));
+  seccomp_core_allow(ctx, SCMP_SYS(clock_getres));
+  seccomp_core_allow(ctx, SCMP_SYS(alarm));
+  seccomp_core_allow(ctx, SCMP_SYS(getitimer));
+  seccomp_core_allow(ctx, SCMP_SYS(setitimer));
+
+  /* --- Signals --- */
+  seccomp_core_allow(ctx, SCMP_SYS(rt_sigpending));
+  seccomp_core_allow(ctx, SCMP_SYS(rt_sigsuspend));
+  seccomp_core_allow(ctx, SCMP_SYS(rt_sigtimedwait));
+  seccomp_core_allow(ctx, SCMP_SYS(rt_sigqueueinfo));
+  seccomp_core_allow(ctx, SCMP_SYS(sigaltstack));
+
+  /* --- System information --- */
+  seccomp_core_allow(ctx, SCMP_SYS(uname));
+  seccomp_core_allow(ctx, SCMP_SYS(sysinfo));
+  seccomp_core_allow(ctx, SCMP_SYS(getrandom));   /* OpenSSL CSPRNG */
+  seccomp_core_allow(ctx, SCMP_SYS(getrlimit));
+  seccomp_core_allow(ctx, SCMP_SYS(setrlimit));
+  seccomp_core_allow(ctx, SCMP_SYS(prlimit64));
+
+  /* --- Misc libc / dynamic linker needs --- */
+  seccomp_core_allow(ctx, SCMP_SYS(sched_getscheduler));
+  seccomp_core_allow(ctx, SCMP_SYS(sched_setscheduler));
+  seccomp_core_allow(ctx, SCMP_SYS(sched_getparam));
+  seccomp_core_allow(ctx, SCMP_SYS(sched_setparam));
+  seccomp_core_allow(ctx, SCMP_SYS(sched_yield));
+  seccomp_core_allow(ctx, SCMP_SYS(sched_getaffinity));
+  seccomp_core_allow(ctx, SCMP_SYS(sched_setaffinity));
+  seccomp_core_allow(ctx, SCMP_SYS(sched_get_priority_min));  /* ALSA RT priority */
+  seccomp_core_allow(ctx, SCMP_SYS(sched_get_priority_max));
+  seccomp_core_allow(ctx, SCMP_SYS(sched_rr_get_interval));
+  seccomp_core_allow(ctx, SCMP_SYS(epoll_pwait));
+#ifdef __NR_epoll_pwait2
+  seccomp_core_allow(ctx, SCMP_SYS(epoll_pwait2));   /* Linux 5.11+ */
+#endif
+  seccomp_core_allow(ctx, SCMP_SYS(semget));
+  seccomp_core_allow(ctx, SCMP_SYS(semop));
+  seccomp_core_allow(ctx, SCMP_SYS(semctl));
+
+  /* --- io_uring (used by service event loops) --- */
+  seccomp_core_allow_io_uring(ctx);
+
+  /* --- Newer stat variant used by glibc realpath() and V4L2 --- */
+  seccomp_core_allow(ctx, SCMP_SYS(statx));
+
+  /* --- openat2 (newer open variant used on recent kernels) --- */
+#ifdef __NR_openat2
+  seccomp_core_allow(ctx, SCMP_SYS(openat2));
+#endif
+
+  /* --- Process session / credentials (used by glibc, ALSA, PAM) --- */
+  seccomp_core_allow(ctx, SCMP_SYS(getsid));
+  seccomp_core_allow(ctx, SCMP_SYS(setsid));
+  seccomp_core_allow(ctx, SCMP_SYS(getppid));
+  seccomp_core_allow(ctx, SCMP_SYS(getpgrp));
+  seccomp_core_allow(ctx, SCMP_SYS(getpgid));
+  seccomp_core_allow(ctx, SCMP_SYS(setpgid));
+  seccomp_core_allow(ctx, SCMP_SYS(setuid));
+  seccomp_core_allow(ctx, SCMP_SYS(setgid));
+  seccomp_core_allow(ctx, SCMP_SYS(setreuid));
+  seccomp_core_allow(ctx, SCMP_SYS(setregid));
+  seccomp_core_allow(ctx, SCMP_SYS(setresuid));
+  seccomp_core_allow(ctx, SCMP_SYS(setresgid));
+  seccomp_core_allow(ctx, SCMP_SYS(setgroups));
+  seccomp_core_allow(ctx, SCMP_SYS(getresuid));
+  seccomp_core_allow(ctx, SCMP_SYS(getresgid));
+
+  /* --- Process execution / environment --- */
+  seccomp_core_allow(ctx, SCMP_SYS(execve));
+  seccomp_core_allow(ctx, SCMP_SYS(execveat));
+  seccomp_core_allow(ctx, SCMP_SYS(vfork));
+  seccomp_core_allow(ctx, SCMP_SYS(fork));
+
+  /* --- File descriptor flags and advanced file ops --- */
+  seccomp_core_allow(ctx, SCMP_SYS(flock));
+  seccomp_core_allow(ctx, SCMP_SYS(fallocate));
+  seccomp_core_allow(ctx, SCMP_SYS(sendfile));
+  seccomp_core_allow(ctx, SCMP_SYS(copy_file_range));
+  seccomp_core_allow(ctx, SCMP_SYS(linkat));
+  seccomp_core_allow(ctx, SCMP_SYS(symlinkat));
+  seccomp_core_allow(ctx, SCMP_SYS(readlinkat));
+  seccomp_core_allow(ctx, SCMP_SYS(faccessat));
+  seccomp_core_allow(ctx, SCMP_SYS(faccessat2));
+
+  /* --- Memory locking (ALSA, real-time audio) --- */
+  seccomp_core_allow(ctx, SCMP_SYS(memfd_create));
+
+  /* --- Misc needed by ALSA / PulseAudio / PipeWire client libs --- */
+  seccomp_core_allow(ctx, SCMP_SYS(personality));
+  seccomp_core_allow(ctx, SCMP_SYS(umask));
+  seccomp_core_allow(ctx, SCMP_SYS(times));
+  seccomp_core_allow(ctx, SCMP_SYS(getrusage));
+  seccomp_core_allow(ctx, SCMP_SYS(gettimeofday));
+  seccomp_core_allow(ctx, SCMP_SYS(settimeofday));
+  seccomp_core_allow(ctx, SCMP_SYS(time));
+  seccomp_core_allow(ctx, SCMP_SYS(getcpu));
+  seccomp_core_allow(ctx, SCMP_SYS(clock_settime));
 
   return 0;
 }

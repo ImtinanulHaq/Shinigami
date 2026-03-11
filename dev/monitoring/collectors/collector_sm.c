@@ -30,14 +30,14 @@ static pid_t find_servicemanager_pid(void) {
         if (entry->d_name[0] < '0' || entry->d_name[0] > '9')
             continue;
             
-        char cmdline_path[256];
+        char cmdline_path[280];
         snprintf(cmdline_path, sizeof(cmdline_path), "/proc/%s/cmdline", entry->d_name);
         
         FILE *f = fopen(cmdline_path, "r");
         if (f) {
             char cmdline[256] = {0};
             if (fread(cmdline, 1, sizeof(cmdline) - 1, f) > 0) {
-                if (strstr(cmdline, "servicemanager") || strstr(cmdline, "bankai")) {
+                if (strstr(cmdline, "sm_daemon") || strstr(cmdline, "servicemanager") || strstr(cmdline, "bankai")) {
                     closedir(proc);
                     fclose(f);
                     return atoi(entry->d_name);
@@ -137,11 +137,44 @@ static int sm_tick(collector_t *self, struct monitord_state *state)
             state->sm.cpu_pct = cpu_pct;
         }
         
-        /* Check for socket - if exists, assume services registered */
+        /* Check for socket - if exists, count running service processes */
         struct stat st;
-        if (stat("/tmp/servicemanager.sock", &st) == 0 || stat("/run/servicemanager.sock", &st) == 0) {
-            /* Set dummy values for now - real implementation would query via IPC */
-            state->sm.registered_services = 0;  /* Would query actualcount */
+        if (stat("/run/middleware/servicemanager.sock", &st) == 0 ||
+            stat("/tmp/servicemanager.sock", &st) == 0 ||
+            stat("/run/servicemanager.sock", &st) == 0) {
+            /* Count running middleware service processes */
+            static const char * const svc_names[] = {
+                "audio_service", "camera_service",
+                "gpio_service", "sensor_service", NULL
+            };
+            uint32_t running_count = 0;
+            for (int k = 0; svc_names[k]; k++) {
+                char path[64];
+                /* Quick check: look for /proc entries matching service name */
+                DIR *pd = opendir("/proc");
+                if (pd) {
+                    struct dirent *de;
+                    while ((de = readdir(pd)) != NULL) {
+                        if (de->d_name[0] < '0' || de->d_name[0] > '9') continue;
+                        char cpath[280];
+                        snprintf(cpath, sizeof(cpath), "/proc/%s/cmdline", de->d_name);
+                        FILE *pf = fopen(cpath, "r");
+                        if (pf) {
+                            char buf[256] = {0};
+                            if (fread(buf, 1, sizeof(buf)-1, pf) > 0 &&
+                                strstr(buf, svc_names[k])) {
+                                running_count++;
+                                fclose(pf);
+                                break;
+                            }
+                            fclose(pf);
+                        }
+                    }
+                    closedir(pd);
+                    (void)path;
+                }
+            }
+            state->sm.registered_services = running_count;
             state->sm.max_services = 32;
         }
     }

@@ -90,7 +90,8 @@ monitord_server_t *monitord_server_start(monitord_config_t *config,
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, config->unix_socket_path, sizeof(addr.sun_path) - 1);
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%.*s",
+             (int)(sizeof(addr.sun_path) - 1), config->unix_socket_path);
 
     unlink(addr.sun_path);  /* Remove stale socket */
 

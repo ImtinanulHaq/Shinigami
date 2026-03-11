@@ -6,7 +6,7 @@
 #include <sys/un.h>
 
 /* Well-known socket path - must be on a filesystem that supports Unix sockets */
-#define SM_SOCKET_PATH  "/run/servicemanager.sock"
+#define SM_SOCKET_PATH  "/run/middleware/servicemanager.sock"
 
 /* 0660: owner and group can connect; others cannot */
 #define SM_SOCKET_MODE  0660

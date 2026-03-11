@@ -47,13 +47,11 @@ sm_config_t sm_config_default(void) {
       .enable_persistence = 1,
   };
 
-  strncpy(cfg.log_file, "/var/log/servicemanager.log",
+  strncpy(cfg.log_file, "/var/log/middleware/servicemanager.log",
           sizeof(cfg.log_file) - 1);
-  strncpy(cfg.socket_path, "/run/servicemanager.sock",
+  strncpy(cfg.socket_path, "/run/middleware/servicemanager.sock",
           sizeof(cfg.socket_path) - 1);
-  strncpy(cfg.persistence_file, "/var/lib/servicemanager/registry.dat",
-          sizeof(cfg.persistence_file) - 1);
-  strncpy(cfg.persistence_file, "/var/lib/servicemanager/registry.dat",
+  strncpy(cfg.persistence_file, "/var/lib/middleware/registry.dat",
           sizeof(cfg.persistence_file) - 1);
   cfg.verify_key_file[0] = '\0'; // Add this line
 

@@ -28,6 +28,7 @@
 #include "../lifecycle/sm_config.h"
 #include "../lifecycle/sm_dependencies.h"
 #include "../lifecycle/sm_graceful_shutdown.h"
+#include "../lifecycle/sm_main.h"        /* own public API — satisfies -Wmissing-prototypes */
 #include "../lifecycle/sm_management.h"
 #include "../lifecycle/sm_persistence.h"
 #include "../lifecycle/sm_service_tier.h"
@@ -54,15 +55,33 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <time.h>
-#include <unistd.h>
+#include <unistd.h>   /* sysconf */
 
 #pragma GCC diagnostic ignored "-Wstringop-truncation"
+
+/* Config file path — set by main() from --config argument, used by sm_run(). */
+static const char *g_config_file = NULL;
 
 /* ── THREAD POOL ──────────────────────────────────────────────────────────────
  */
 
-#define DEFAULT_THREAD_POOL_SIZE 4 /* worker threads (overridden by config) */
-#define DEFAULT_WORK_QUEUE_SIZE                                                \
+/*
+ * Scale the default worker count to the host CPU topology at runtime.
+ * Floor at 2 (one accept thread + one worker minimum) and
+ * cap at MAX_THREAD_POOL_SIZE so we don't over-provision on many-core hosts.
+ */
+static int default_pool_size(void)
+{
+    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+    if (ncpu < 1) ncpu = 1;
+    /* Use 2× CPU count as a sensible default for I/O-bound daemon threads. */
+    long sz = ncpu * 2;
+    if (sz < 2)   sz = 2;
+    if (sz > 64)  sz = 64;
+    return (int)sz;
+}
+
+#define DEFAULT_WORK_QUEUE_SIZE \
   64 /* pending file descriptors (overridden by config) */
 #define MAX_THREAD_POOL_SIZE 64
 #define MAX_WORK_QUEUE_SIZE 4096
@@ -80,7 +99,7 @@ typedef struct {
 
 static work_queue_t work_queue;
 static pthread_t *workers = NULL;
-static int pool_size = DEFAULT_THREAD_POOL_SIZE;
+static int pool_size = 0;  /* Resolved by default_pool_size() in threadpool_init */
 
 static void wq_init(work_queue_t *q, int queue_capacity) {
   memset(q, 0, sizeof(*q));
@@ -154,7 +173,7 @@ static int threadpool_init(void) {
   pool_size = (cfg && cfg->thread_pool_size > 0 &&
                cfg->thread_pool_size <= MAX_THREAD_POOL_SIZE)
                   ? cfg->thread_pool_size
-                  : DEFAULT_THREAD_POOL_SIZE;
+                  : default_pool_size();
   int queue_size = (cfg && cfg->work_queue_size >= 4 &&
                     cfg->work_queue_size <= MAX_WORK_QUEUE_SIZE)
                        ? cfg->work_queue_size
@@ -220,23 +239,29 @@ static void threadpool_shutdown(void) {
   sm_log(SM_LOG_INFO, "main: thread pool stopped");
 }
 
-/* ── SIGNAL HANDLING ──────────────────────────────────────────────────────────
+#include <stdatomic.h>
+
+/* ── SIGNAL HANDLING ──────────────────────────────────────────────────────────────
  */
 
-static volatile int running = 1;
+/* _Atomic int: safe write from logically one thread (main event loop), but
+ * the atomic type documents intent and prevents compiler optimisation of reads
+ * in the while() loop. */
+static _Atomic int running = 1;
 
 static void setup_signals(void) {
   sigset_t set;
 
-  /* Block SIGTERM, SIGHUP, and SIGPIPE - handle via signalfd */
+  /* Block SIGTERM, SIGINT, SIGHUP, and SIGPIPE — handle via signalfd.
+   * SIGINT blocked here ensures Ctrl+C triggers a clean shutdown rather
+   * than an unhandled termination. */
   sigemptyset(&set);
   sigaddset(&set, SIGTERM);
+  sigaddset(&set, SIGINT);
   sigaddset(&set, SIGHUP);
   sigaddset(&set, SIGPIPE);
 
   pthread_sigmask(SIG_BLOCK, &set, NULL);
-
-  /* Signal handlers are no longer needed - signalfd will handle signals */
 }
 
 /* ── CLEANUP ──────────────────────────────────────────────────────────────────
@@ -293,8 +318,9 @@ int sm_run(void) {
 
   /* * FIX: Load configuration FIRST so the crypto subsystem
    * can read the verify_key_file path from the config.
+   * Use config file from --config argument, or fall back to /etc/servicemanager.conf.
    */
-  if (sm_config_load(NULL) < 0) {
+  if (sm_config_load(g_config_file) < 0) {
     sm_log(SM_LOG_WARN, "main: config load failed, using defaults");
   }
 
@@ -384,10 +410,12 @@ int sm_run(void) {
     return -1;
   }
 
-  /* Create signalfd for signal-safe event handling */
+  /* Create signalfd for signal-safe event handling.
+   * Block SIGTERM, SIGINT, SIGHUP — all handled via this fd. */
   sigset_t sigset;
   sigemptyset(&sigset);
   sigaddset(&sigset, SIGTERM);
+  sigaddset(&sigset, SIGINT);
   sigaddset(&sigset, SIGHUP);
 
   int signal_fd = signalfd(-1, &sigset, SFD_CLOEXEC | SFD_NONBLOCK);
@@ -429,7 +457,7 @@ int sm_run(void) {
 
   last_health_check = time(NULL);
 
-  while (running) {
+  while (atomic_load_explicit(&running, memory_order_acquire)) {
     n = epoll_wait(epoll_fd, events, 32, 3000 /* ms */);
 
     if (n < 0) {
@@ -447,9 +475,10 @@ int sm_run(void) {
         ssize_t s = read(signal_fd, &sinfo, sizeof(sinfo));
 
         if (s == sizeof(sinfo)) {
-          if (sinfo.ssi_signo == SIGTERM) {
-            sm_log(SM_LOG_INFO, "main: SIGTERM received - initiating shutdown");
-            running = 0;
+          if (sinfo.ssi_signo == SIGTERM || sinfo.ssi_signo == SIGINT) {
+            sm_log(SM_LOG_INFO, "main: %s received - initiating shutdown",
+                   sinfo.ssi_signo == SIGTERM ? "SIGTERM" : "SIGINT");
+            atomic_store_explicit(&running, 0, memory_order_release);
           } else if (sinfo.ssi_signo == SIGHUP) {
             sm_log(SM_LOG_INFO, "main: SIGHUP received - reloading config");
 
@@ -714,7 +743,12 @@ void sm_disconnect(int fd) {
  */
 
 int main(int argc, char *argv[]) {
-  (void)argc;
-  (void)argv;
+  /* Parse --config <path> argument */
+  for (int i = 1; i < argc - 1; i++) {
+    if (strcmp(argv[i], "--config") == 0) {
+      g_config_file = argv[i + 1];
+      break;
+    }
+  }
   return sm_run();
 }

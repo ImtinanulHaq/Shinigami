@@ -192,24 +192,22 @@ target_sources(mw_tui_bin
         tui/panel_topbar.c
 )
 
-target_include_directories(mw_tui_bin
-    PRIVATE
-        ${MON_ROOT}/tui
-        ${MON_ROOT}/protocol
-        ${CMAKE_BINARY_DIR}/include
-)
-
 target_link_libraries(mw_tui_bin
     PRIVATE
         ${CURSES_LIBRARIES}
         mw::compile_opts
         mw::core
         Threads::Threads
-	mw_mon_health
+        mw_mon_health
 )
 
+# All TUI include dirs in one call: sources, protocol, generated headers, ncurses
 target_include_directories(mw_tui_bin
-    PRIVATE ${CURSES_INCLUDE_DIRS}
+    PRIVATE
+        ${MON_ROOT}/tui
+        ${MON_ROOT}/protocol
+        ${CMAKE_BINARY_DIR}/include
+        ${CURSES_INCLUDE_DIRS}
 )
 
 target_link_options(mw_tui_bin PRIVATE

@@ -690,7 +690,7 @@ int gpio_hal_wait_interrupt(hw_device_t *device_ptr, uint32_t timeout_ms) {
   /* Drain any stale pending event before arming the poll. */
   char dummy[4];
   lseek(priv->value_fd, 0, SEEK_SET);
-  read(priv->value_fd, dummy, sizeof(dummy));
+  ssize_t __attribute__((unused)) _ign = read(priv->value_fd, dummy, sizeof(dummy));
 
   struct pollfd pfd;
   pfd.fd = priv->value_fd;

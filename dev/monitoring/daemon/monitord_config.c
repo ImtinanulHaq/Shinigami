@@ -61,7 +61,7 @@ int monitord_config_load(monitord_config_t *config, const char *path)
 
         f = fopen(p, "r");
         if (f) {
-            strncpy(g_config_path, p, sizeof(g_config_path) - 1);
+            snprintf(g_config_path, sizeof(g_config_path), "%s", p);
             break;
         }
     }

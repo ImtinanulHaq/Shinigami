@@ -50,9 +50,10 @@ int  sm_registry_init(void);
 
 int  sm_registry_add(const service_entry_t* entry);
 
-/* Returns a direct pointer into the registry array (valid only while registry
-   lock is held by caller - intended for server-side single-threaded use).
-   Use sm_registry_find_copy() for safe concurrent access. */
+/* DEPRECATED — TOCTOU-unsafe: lock is released before the pointer is returned.
+ * Any concurrent sm_registry_remove() call can invalidate the pointer.
+ * Use sm_registry_find_copy() for all new code.                              */
+__attribute__((deprecated("Use sm_registry_find_copy() - this function is TOCTOU-unsafe")))
 service_entry_t* sm_registry_find(const char* name);
 
 /*

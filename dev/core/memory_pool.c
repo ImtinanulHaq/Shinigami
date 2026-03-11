@@ -12,7 +12,9 @@
  * - All logging via syslog() — no fprintf to avoid mixed output streams.
  */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "memory_pool.h"
 
 #include <sys/mman.h>

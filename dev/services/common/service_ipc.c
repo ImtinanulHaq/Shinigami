@@ -13,7 +13,9 @@
  * data; all communication is client-initiated.
  */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "service_ipc.h"
 #include "service_base.h"
 
@@ -174,8 +176,8 @@ static int open_sm_connection(svc_ipc_t *ipc)
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, ipc->socket_path, sizeof(addr.sun_path) - 1);
-    addr.sun_path[sizeof(addr.sun_path) - 1] = '\0';
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%.*s",
+             (int)(sizeof(addr.sun_path) - 1), ipc->socket_path);
 
     if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         LOG_ERR("open_sm_connection: connect(%s): %s",
@@ -238,7 +240,7 @@ int service_ipc_register(svc_ipc_t *ipc, const char *exe_path,
 
     svc_register_payload_t req;
     memset(&req, 0, sizeof(req));
-    strncpy(req.service_name, ipc->service_name, SM_MAX_NAME - 1);
+    snprintf(req.service_name, sizeof(req.service_name), "%s", ipc->service_name);
     snprintf(req.socket_path, SM_MAX_PATH, "/run/%s.sock", ipc->service_name);
     snprintf(req.ring_name, SM_MAX_PATH, "/dev/shm/%s_ring", ipc->service_name);
     req.pid = (int32_t)pid;
@@ -289,7 +291,7 @@ int service_ipc_heartbeat(svc_ipc_t *ipc)
 
     sm_heartbeat_req_t req;
     memset(&req, 0, sizeof(req));
-    strncpy(req.service_name, ipc->service_name, SM_MAX_NAME - 1);
+    snprintf(req.service_name, sizeof(req.service_name), "%s", ipc->service_name);
 
     sm_hdr_t hdr;
     fill_header(&hdr, SVC_MSG_HEARTBEAT, (uint32_t)sizeof(req),
@@ -332,7 +334,7 @@ int service_ipc_unregister(svc_ipc_t *ipc)
 
     sm_unregister_req_t req;
     memset(&req, 0, sizeof(req));
-    strncpy(req.service_name, ipc->service_name, SM_MAX_NAME - 1);
+    snprintf(req.service_name, sizeof(req.service_name), "%s", ipc->service_name);
 
     sm_hdr_t hdr;
     fill_header(&hdr, SVC_MSG_UNREGISTER, (uint32_t)sizeof(req),

@@ -21,6 +21,10 @@ typedef struct {
     int enable_auditing;
     uid_t target_uid;
     gid_t target_gid;
+    /* Hardware access: supplementary GIDs to retain after privilege drop.
+     * e.g. audio(29), video(44), gpio group.  Zero-terminated array. */
+    gid_t supplementary_gids[8];
+    int supplementary_gid_count;
 } capabilities_config_t;
 
 typedef struct {

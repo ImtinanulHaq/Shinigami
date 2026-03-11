@@ -119,7 +119,7 @@
       "displayName": "Cross — AArch64",
       "description": "Cross-compile for AArch64 (ARM64) embedded targets",
       "inherits": "base",
-      "toolchainFile": "${sourceDir}/cmake/toolchains/linux-aarch64.cmake",
+      "toolchainFile": "${sourceDir}/cmake/toolchain/linux-aarch64.cmake",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE":  "Release",
         "MW_ENABLE_LTO":     "ON",
@@ -132,7 +132,7 @@
       "displayName": "Cross — ARM32",
       "description": "Cross-compile for ARMv7-A embedded targets",
       "inherits": "base",
-      "toolchainFile": "${sourceDir}/cmake/toolchains/linux-arm.cmake",
+      "toolchainFile": "${sourceDir}/cmake/toolchain/linux-arm.cmake",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE":  "Release",
         "MW_ENABLE_LTO":     "ON",

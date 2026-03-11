@@ -174,6 +174,23 @@ add_feature_info("ncurses" TRUE "TUI support enabled")
 pkg_check_modules(LIBBSD IMPORTED_TARGET libbsd)
 
 # ---------------------------------------------------------------------------
+# Pre-compute variables required by version.h.in before configure_file()
+# ---------------------------------------------------------------------------
+
+# Build timestamp in ISO-8601 UTC format
+string(TIMESTAMP MW_BUILD_TIMESTAMP "%Y-%m-%dT%H:%M:%SZ" UTC)
+
+# Security feature flags as 0/1 integers (configure_file cannot use
+# generator expressions, so we materialise the values here)
+foreach(_feat SANDBOX SECCOMP CAPS VERIFY)
+    if(MW_SECURITY_${_feat})
+        set(MW_SECURITY_${_feat}_INT 1)
+    else()
+        set(MW_SECURITY_${_feat}_INT 0)
+    endif()
+endforeach()
+
+# ---------------------------------------------------------------------------
 # Generated header — version + build metadata, single copy for the whole tree
 # ---------------------------------------------------------------------------
 configure_file(
@@ -236,7 +253,7 @@ write_basic_package_version_file(
 )
 
 configure_package_config_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/linux_middlewareConfig.cmake.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/toolchain/linux_middlewareConfig.cmake.in"
     "${CMAKE_BINARY_DIR}/cmake/linux_middlewareConfig.cmake"
     INSTALL_DESTINATION "${_cmake_install_dir}"
     PATH_VARS CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_LIBDIR

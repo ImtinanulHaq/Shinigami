@@ -66,7 +66,6 @@ mw_sm_sublibrary(mw_sm_infrastructure
         infrastructure/sm_request_id.c
     LINK_LIBS
         mw::core
-        mw_sm_security                    # <--- Added to fix ratelimit linker dependency
         OpenSSL::Crypto
         Threads::Threads
 )
@@ -82,7 +81,6 @@ mw_sm_sublibrary(mw_sm_security
         security/sm_rate_limit.c
     LINK_LIBS
         mw::core
-        mw_sm_observability         # <--- ADD THIS LINE
         OpenSSL::Crypto
 )
 
@@ -150,24 +148,29 @@ mw_sm_sublibrary(mw_sm_enterprise
 add_library(mw_sm_lib INTERFACE)
 add_library(mw::sm ALIAS mw_sm_lib)
 
-# No sources of its own — it's a link aggregator
+# No sources of its own — it's a link aggregator.
+#
+# The SM sub-libraries have legitimate cross-layer calls (e.g. mw_sm_security
+# calls sm_log from mw_sm_observability; mw_sm_infrastructure calls sm_log and
+# sm_ratelimit_check from mw_sm_security/mw_sm_observability).  With GNU ld,
+# these mutually-referencing archives are safely resolved by instructing the
+# linker to rescan the group until all symbols are satisfied.
+#
+# $<LINK_GROUP:RESCAN,...> emits -Wl,--start-group ... -Wl,--end-group on GCC/Clang.
+# This is a no-op on compilers/linkers that do not support group rescanning.
 target_link_libraries(mw_sm_lib
     INTERFACE
-        mw_sm_infrastructure
-        mw_sm_security
-        mw_sm_lifecycle
-        mw_sm_observability
-        mw_sm_enterprise
+        $<LINK_GROUP:RESCAN,
+            mw_sm_infrastructure,
+            mw_sm_security,
+            mw_sm_lifecycle,
+            mw_sm_observability,
+            mw_sm_enterprise>
         mw::core
 )
 
-# NOTE: You must also REMOVE the set_target_properties() block below it.
-# INTERFACE libraries don't need POSITION_INDEPENDENT_CODE set on them directly, 
-# and your `mw_sm_sublibrary` macro already applies it to all the sub-libraries anyway.
-
-set_target_properties(mw_sm_lib PROPERTIES
-    POSITION_INDEPENDENT_CODE ON
-)
+# INTERFACE libraries do not support POSITION_INDEPENDENT_CODE as a direct
+# property — the mw_sm_sublibrary macro already sets it on every sub-library.
 
 # ---------------------------------------------------------------------------
 # sm_daemon — the service manager executable

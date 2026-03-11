@@ -14,6 +14,19 @@
 *.d          # GCC dependency files
 *.i          # pre-processed C source
 *.s          # assembler output
+*.a
+*.so
+*.lo
+*.la
+*.d
+*.i
+*.s
+*.txt
+*.cmake
+*.make
+*.cache
+*.c.o
+*.c.bak
 
 # ── Executable binaries (Makefile targets) ───────────────────
 servicemanager

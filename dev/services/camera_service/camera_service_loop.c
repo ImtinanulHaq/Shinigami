@@ -14,7 +14,9 @@
  * a V4L2 buffer, which is stored in a circular frame_queue_t.
  */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "camera_service_loop.h"
 #include "camera_service_hal.h"
 #include "../common/service_base.h"

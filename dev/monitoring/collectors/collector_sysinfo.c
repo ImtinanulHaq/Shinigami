@@ -61,7 +61,7 @@ static int sysinfo_tick(collector_t *self, struct monitord_state *state)
     f = fopen("/proc/meminfo", "r");
     if (f) {
         char line[256];
-        uint64_t mem_total_kb = 0, mem_free_kb = 0, mem_available_kb = 0;
+        uint64_t mem_total_kb = 0, mem_available_kb = 0;
         uint64_t swap_total_kb = 0, swap_free_kb = 0;
         
         while (fgets(line, sizeof(line), f)) {

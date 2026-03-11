@@ -11,7 +11,9 @@
  * There is no persistent SM socket FD to watch in the event loop.
  */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "audio_service_loop.h"
 #include "audio_service_hal.h"
 #include "../common/service_base.h"

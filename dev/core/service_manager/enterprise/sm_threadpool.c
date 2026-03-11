@@ -13,9 +13,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <unistd.h>
+#include <unistd.h>   /* sysconf */
 
-#define DEFAULT_POOL_SIZE 8
+/*
+ * Determine default worker count at runtime from the host CPU topology.
+ * 2× online cores is a sensible default for I/O-bound worker threads.
+ * Clamp to [2, 256] so we never under- or over-provision.
+ */
+static int default_worker_count(void)
+{
+    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+    if (ncpu < 1) ncpu = 1;
+    long sz = ncpu * 2;
+    if (sz < 2)   sz = 2;
+    if (sz > 256) sz = 256;
+    return (int)sz;
+}
+
 #define DEFAULT_QUEUE_SIZE 128
 
 typedef struct {
@@ -98,7 +112,7 @@ int sm_threadpool_init(int worker_count, int queue_max_size)
         return -1;
     }
     
-    if (worker_count <= 0) worker_count = DEFAULT_POOL_SIZE;
+    if (worker_count <= 0) worker_count = default_worker_count();
     if (queue_max_size <= 0) queue_max_size = DEFAULT_QUEUE_SIZE;
     
     if (worker_count > 256) {

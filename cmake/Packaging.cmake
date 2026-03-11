@@ -58,10 +58,17 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS
 )
 
 # Conffiles — config files that should not be overwritten on upgrade
-set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
-    "${CMAKE_SOURCE_DIR}/packaging/deb/postinst"
-    "${CMAKE_SOURCE_DIR}/packaging/deb/prerm"
-)
+# Only add maintainer scripts if they are present (safe for source-only builds)
+set(_deb_postinst "${CMAKE_SOURCE_DIR}/packaging/deb/postinst")
+set(_deb_prerm    "${CMAKE_SOURCE_DIR}/packaging/deb/prerm")
+if(EXISTS "${_deb_postinst}" AND EXISTS "${_deb_prerm}")
+    set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+        "${_deb_postinst}"
+        "${_deb_prerm}"
+    )
+else()
+    message(STATUS "[MW] CPack: packaging/deb scripts not found — skipping CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA")
+endif()
 
 set(CPACK_DEB_COMPONENT_INSTALL ON)
 

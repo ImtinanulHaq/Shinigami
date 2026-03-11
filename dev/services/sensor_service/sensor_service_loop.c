@@ -13,7 +13,9 @@
  * Latest readings are stored in mutex-protected g_latest for IPC clients.
  */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "sensor_service_loop.h"
 #include "sensor_service_hal.h"
 #include "../common/service_base.h"
@@ -116,12 +118,12 @@ static int on_hal_data(int fd, int result, void *user_data,
         g_latest.is_3axis  = 1;
         g_latest.timestamp = time(NULL);
         LOG_DEBUG("IIO 3-axis: x=%.4f y=%.4f z=%.4f",
-                  g_latest.axis.x, g_latest.axis.y, g_latest.axis.z);
+                  (double)g_latest.axis.x, (double)g_latest.axis.y, (double)g_latest.axis.z);
     } else {
         sensor_hal_read_1axis(dev, &g_latest.scalar);
         g_latest.is_3axis  = 0;
         g_latest.timestamp = time(NULL);
-        LOG_DEBUG("IIO 1-axis: value=%.4f", g_latest.scalar.value);
+        LOG_DEBUG("IIO 1-axis: value=%.4f", (double)g_latest.scalar.value);
     }
     pthread_mutex_unlock(&g_latest.lock);
     return 0;

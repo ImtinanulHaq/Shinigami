@@ -11,6 +11,8 @@
 
 include_guard(GLOBAL)
 
+include(CheckLinkerFlag)
+
 # Helper: test a C compiler flag and add it to list if supported
 function(_mw_check_c_flag flag list_var)
     string(MAKE_C_IDENTIFIER "HAVE_C${flag}" _cache_var)
@@ -25,6 +27,17 @@ endfunction()
 function(_mw_check_cxx_flag flag list_var)
     string(MAKE_C_IDENTIFIER "HAVE_CXX${flag}" _cache_var)
     check_cxx_compiler_flag("${flag}" "${_cache_var}")
+    if(${_cache_var})
+        list(APPEND ${list_var} "${flag}")
+        set(${list_var} "${${list_var}}" PARENT_SCOPE)
+    endif()
+endfunction()
+
+# Helper: test a linker flag using check_linker_flag() (CMake 3.18+)
+# Uses language C; result cached in HAVE_LINK<mangled_flag>
+function(_mw_check_link_flag flag list_var)
+    string(MAKE_C_IDENTIFIER "HAVE_LINK${flag}" _cache_var)
+    check_linker_flag(C "${flag}" "${_cache_var}")
     if(${_cache_var})
         list(APPEND ${list_var} "${flag}")
         set(${list_var} "${${list_var}}" PARENT_SCOPE)
@@ -51,11 +64,15 @@ function(mw_apply_hardening target)
     # We check both; pick whichever is available
     _mw_check_c_flag("-fcf-protection=full" _common_flags)  # x86 CET (GCC/Clang)
 
-    # Fortify source — catches common buffer/string bugs at runtime
-    # Use _FORTIFY_SOURCE=3 if available (GCC 12+), fall back to 2
-    _mw_check_c_flag("-D_FORTIFY_SOURCE=3" _common_flags)
-    if(NOT HAVE_C_D_FORTIFY_SOURCE_3)
-	    _mw_check_c_flag("-D_FORTIFY_SOURCE=2" _common_flags)
+    # Fortify source — catches common buffer/string bugs at runtime.
+    # Requires at least -O1; silently does nothing (or warns with -Werror)
+    # in Debug (-O0) builds. Guard it so Debug builds stay clean.
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+        # Use _FORTIFY_SOURCE=3 if available (GCC 12+), fall back to 2
+        _mw_check_c_flag("-D_FORTIFY_SOURCE=3" _common_flags)
+        if(NOT HAVE_C_D_FORTIFY_SOURCE_3)
+            _mw_check_c_flag("-D_FORTIFY_SOURCE=2" _common_flags)
+        endif()
     endif()
 
     # Wipe stack allocations to zero on function entry (Clang)
@@ -97,27 +114,35 @@ function(mw_apply_hardening target)
     set(_link_flags "")
 
     # RELRO — make GOT/PLT read-only after loading
-    _mw_check_c_flag("-Wl,-z,relro"         _link_flags)
-    _mw_check_c_flag("-Wl,-z,now"           _link_flags)   # Full RELRO
+    # NOTE: linker flags must be tested with check_linker_flag(), not
+    # check_c_compiler_flag() — the latter only compiles, never links,
+    # so linker-specific flags would falsely pass the compile-only probe.
+    _mw_check_link_flag("-Wl,-z,relro"         _link_flags)
+    _mw_check_link_flag("-Wl,-z,now"           _link_flags)   # Full RELRO
 
     # No executable stack
-    _mw_check_c_flag("-Wl,-z,noexecstack"   _link_flags)
+    _mw_check_link_flag("-Wl,-z,noexecstack"   _link_flags)
 
     # Disallow text relocations in shared libs
-    _mw_check_c_flag("-Wl,-z,notext"        _link_flags)
+    _mw_check_link_flag("-Wl,-z,notext"        _link_flags)
 
     # Warn on undefined symbols at link time (catches missing link deps)
     if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
-        _mw_check_c_flag("-Wl,-z,defs"     _link_flags)
+        _mw_check_link_flag("-Wl,-z,defs"      _link_flags)
     endif()
 
     # Separate code and data segments
-    _mw_check_c_flag("-Wl,-z,separate-code" _link_flags)
+    _mw_check_link_flag("-Wl,-z,separate-code" _link_flags)
 
     # ── Warning flags (all build types) ──────────────────────────────────
     list(APPEND _c_flags
         "-Wall"
         "-Wextra"
+        # -Wpedantic omitted for C: the codebase uses ##__VA_ARGS__ (GNU extension)
+        # which causes spurious "ISO C99 requires at least one argument for '...'"
+        # warnings on every zero-arg LOG_XXX("msg") call site.  The extension is
+        # harmless and universally supported; -Wpedantic stays for C++ where
+        # __VA_OPT__ (C++20) eliminates the need for the GNU extension.
         "-Wshadow"
         "-Wpointer-arith"
         "-Wcast-align"
@@ -125,11 +150,16 @@ function(mw_apply_hardening target)
         "-Wnull-dereference"
         "-Wdouble-promotion"
         "-Wundef"
+        # Build-type optimisation flags — CMake sets defaults but we make them explicit
+        $<$<CONFIG:Release>:-O3>
+        $<$<CONFIG:RelWithDebInfo>:-O2>
+        $<$<CONFIG:Debug>:-Og -g3>
     )
 
     list(APPEND _cxx_flags
         "-Wall"
         "-Wextra"
+        "-Wpedantic"
         "-Wshadow"
         "-Wnon-virtual-dtor"
         "-Wold-style-cast"
@@ -138,6 +168,9 @@ function(mw_apply_hardening target)
         "-Woverloaded-virtual"
         "-Wdouble-promotion"
         "-Wundef"
+        $<$<CONFIG:Release>:-O3>
+        $<$<CONFIG:RelWithDebInfo>:-O2>
+        $<$<CONFIG:Debug>:-Og -g3>
     )
 
     # Warnings as errors in CI/Release

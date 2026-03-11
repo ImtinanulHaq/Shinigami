@@ -39,6 +39,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <syslog.h>
 #include <unistd.h>
 
 /* ── path prefix for V4L2 devices [PROPOSED] ─────────────────────────── */
@@ -126,11 +127,17 @@ int camera_hal_validate_device_path(const char *v4l2_dev_path) {
     return -1;
 
   char resolved[PATH_MAX];
-  if (realpath(v4l2_dev_path, resolved) == NULL)
+  if (realpath(v4l2_dev_path, resolved) == NULL) {
+    syslog(LOG_ERR, "[cam_hal] realpath('%s') failed: %s",
+           v4l2_dev_path, strerror(errno));
     return -1;
+  }
 
-  if (strncmp(resolved, V4L2_DEV_PREFIX, strlen(V4L2_DEV_PREFIX)) != 0)
+  if (strncmp(resolved, V4L2_DEV_PREFIX, strlen(V4L2_DEV_PREFIX)) != 0) {
+    syslog(LOG_ERR, "[cam_hal] resolved path '%s' not under '%s'",
+           resolved, V4L2_DEV_PREFIX);
     return -1;
+  }
 
   return 0;
 }

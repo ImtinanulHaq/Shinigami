@@ -19,7 +19,7 @@ void panel_overview_render(const mon_snapshot_t *snapshot, int y, int h, int col
     /* Service Manager */
     mvprintw(row++, 4, "Service Manager: %u PID | Services: %u/%u registered | CPU: %.1f%%",
              snapshot->sm.pid, snapshot->sm.registered_services,
-             snapshot->sm.max_services, snapshot->sm.cpu_pct);
+             snapshot->sm.max_services, (double)snapshot->sm.cpu_pct);
 
     /* Watchdog */
     uint32_t watchdog_alive = 0;
@@ -47,7 +47,7 @@ row++;
 
         attron(COLOR_PAIR(color));
         mvprintw(row++, 6, "%-16s CPU: %5.1f%% | RAM: %4lu MB | Health: %3d/100",
-                 s->name, s->cpu_pct, s->rss_bytes / (1024*1024), svc_health);
+                 s->name, (double)s->cpu_pct, s->rss_bytes / (1024*1024), svc_health);
         attroff(COLOR_PAIR(color));
     }
     row++;

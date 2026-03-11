@@ -24,7 +24,7 @@ typedef struct monitord_state {
     sysinfo_metrics_t        sysinfo;
     sm_metrics_t             sm;
     watchdog_metrics_t       watchdog;
-    hal_metrics_t            hal;
+    hal_metrics_t            hal[HAL_MAX_DEVICES];
     service_metrics_t        services[SERVICE_MAX];
     pool_metrics_t           pools[POOL_MAX];
     uring_metrics_t          urings[URING_MAX];

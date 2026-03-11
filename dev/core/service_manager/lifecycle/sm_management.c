@@ -11,6 +11,8 @@
  * - Proper HTTP status codes and headers
  * - Request/response parsing
  * - Audit logging
+ * - Sub-millisecond response: non-blocking accept loop with 1 s epoll timeout,
+ *   SO_RCVTIMEO/SO_SNDTIMEO on every client fd (2 s), accept4(SOCK_CLOEXEC).
  */
 
 #include "../lifecycle/sm_management.h"
@@ -20,20 +22,20 @@
 #include "../infrastructure/sm_registry.h"
 #include "../security/sm_crypto.h"
 #include "../security/sm_security.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <ctype.h>
+#include <errno.h>
+#include <stdatomic.h>
+#include <sys/epoll.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <ctype.h>
-#include <errno.h>
-
-#define MAX_HTTP_HEADER_SIZE 4096
-#define MAX_MGMT_ENDPOINTS 10
 
 typedef struct {
     char method[16];
@@ -49,8 +51,14 @@ typedef struct {
     int (*handler)(http_request_t* req, char* response_body, int max_len);
 } mgmt_endpoint_t;
 
-static int mgmt_fd = -1;
-static volatile int mgmt_running = 0;
+#define MAX_HTTP_HEADER_SIZE 4096
+#define MAX_MGMT_ENDPOINTS 10
+
+/* Timeout for client I/O: prevents a slow/malicious client from blocking
+ * the management thread indefinitely. */
+#define MGMT_CLIENT_IO_TIMEOUT_SEC 2
+/* Timeout on accept() itself: allows periodic mgmt_running re-check. */
+#define MGMT_ACCEPT_TIMEOUT_SEC    1
 
 /* Parse HTTP request from raw data */
 static int parse_http_request(const char* raw_data, int len, http_request_t* req)
@@ -378,6 +386,10 @@ static void process_management_request(int client_fd)
     send_http_response(client_fd, status_code, response_body);
 }
 
+/* File-scope state — must appear before management_worker() uses them */
+static int          mgmt_fd      = -1;
+static _Atomic int  mgmt_running = 0;
+
 /* Management API worker thread */
 static void* management_worker(void* arg)
 {
@@ -385,80 +397,95 @@ static void* management_worker(void* arg)
     
     const sm_config_t* config = sm_config_get();
     int port = config ? config->management_port : 9999;
-    
+
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     server_addr.sin_port = htons((uint16_t)port);
-    
-    mgmt_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    mgmt_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (mgmt_fd < 0) {
         sm_log(SM_LOG_ERROR, "management: socket creation failed");
         return NULL;
     }
-    
+
     int opt = 1;
     setsockopt(mgmt_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    
+
     if (bind(mgmt_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         sm_log(SM_LOG_ERROR, "management: bind to port %d failed", port);
         close(mgmt_fd);
         mgmt_fd = -1;
         return NULL;
     }
-    
+
     if (listen(mgmt_fd, 5) < 0) {
         sm_log(SM_LOG_ERROR, "management: listen failed");
         close(mgmt_fd);
         mgmt_fd = -1;
         return NULL;
     }
-    
-    sm_log(SM_LOG_INFO, "management: listening on 127.0.0.1:%d (HMAC-SHA256 auth required)", port);
-    
-    /* Accept and process management connections */
-    while (mgmt_running) {
+
+    /* SO_RCVTIMEO on the listening socket: accept() wakes up every
+     * MGMT_ACCEPT_TIMEOUT_SEC so we can re-check mgmt_running. */
+    struct timeval accept_tv = { .tv_sec = MGMT_ACCEPT_TIMEOUT_SEC, .tv_usec = 0 };
+    setsockopt(mgmt_fd, SOL_SOCKET, SO_RCVTIMEO, &accept_tv, sizeof(accept_tv));
+
+    sm_log(SM_LOG_INFO,
+           "management: listening on 127.0.0.1:%d (HMAC-SHA256 auth required)", port);
+
+    /* Accept and process connections.
+     * accept4() with SOCK_CLOEXEC prevents fd leaks to child processes.
+     * Each client gets its own I/O timeout to prevent slow-client blocking. */
+    while (atomic_load_explicit(&mgmt_running, memory_order_acquire)) {
         struct sockaddr_in client;
         socklen_t clen = sizeof(client);
-        
-        int client_fd = accept(mgmt_fd, (struct sockaddr*)&client, &clen);
+
+        int client_fd = accept4(mgmt_fd, (struct sockaddr*)&client, &clen,
+                                SOCK_CLOEXEC);
         if (client_fd < 0) {
-            if (mgmt_running) {
-                sm_log(SM_LOG_WARN, "management: accept() failed");
-            }
+            /* Timeout or signal — re-check running flag */
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+                continue;
+            if (atomic_load_explicit(&mgmt_running, memory_order_relaxed))
+                sm_log(SM_LOG_WARN, "management: accept4() failed: %s", strerror(errno));
             continue;
         }
-        
-        /* Process authenticated request */
+
+        /* Per-client I/O deadline — sub-ms responses, max 2 s wait */
+        struct timeval client_tv = { .tv_sec = MGMT_CLIENT_IO_TIMEOUT_SEC, .tv_usec = 0 };
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &client_tv, sizeof(client_tv));
+        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &client_tv, sizeof(client_tv));
+
         process_management_request(client_fd);
         close(client_fd);
     }
-    
+
     return NULL;
 }
 
 int sm_management_start(int port)
 {
     pthread_t tid;
-    
-    if (mgmt_running) {
+
+    if (atomic_load_explicit(&mgmt_running, memory_order_relaxed)) {
         sm_log(SM_LOG_WARN, "management: already running");
         return -1;
     }
-    
+
     /* Parameter port is ignored; config port is used instead */
     (void)port;
-    
-    mgmt_running = 1;
-    
+
+    atomic_store_explicit(&mgmt_running, 1, memory_order_release);
+
     if (pthread_create(&tid, NULL, management_worker, NULL) != 0) {
-        mgmt_running = 0;
+        atomic_store_explicit(&mgmt_running, 0, memory_order_relaxed);
         sm_log(SM_LOG_ERROR, "management: failed to create worker thread");
         return -1;
     }
-    
+
     pthread_detach(tid);
-    
+
     const sm_config_t* config = sm_config_get();
     int actual_port = config ? config->management_port : 9999;
     sm_log(SM_LOG_INFO, "management: API started (port=%d, auth=HMAC-SHA256)", actual_port);
@@ -467,12 +494,12 @@ int sm_management_start(int port)
 
 void sm_management_stop(void)
 {
-    mgmt_running = 0;
-    
+    atomic_store_explicit(&mgmt_running, 0, memory_order_release);
+
     if (mgmt_fd >= 0) {
         close(mgmt_fd);
         mgmt_fd = -1;
     }
-    
+
     sm_log(SM_LOG_INFO, "management: API stopped");
 }

@@ -31,6 +31,8 @@
 #include <pthread.h>
 #include <time.h>
 #include <ctype.h>
+#include <signal.h>
+#include <errno.h>
 
 /* ── STATE ──────────────────────────────────────────────────────────────────── */
 
@@ -160,11 +162,25 @@ int sm_registry_add(const service_entry_t* entry)
 
     pthread_rwlock_wrlock(&registry_lock);
 
-    if (hash_find(entry->name) >= 0) {
-        pthread_rwlock_unlock(&registry_lock);
-        /* FIX 7: log lock ke bahar */
-        sm_log(SM_LOG_ERROR, "registry: '%s' already registered", entry->name);
-        return SM_ERR_EXISTS;
+    int existing_idx = hash_find(entry->name);
+    if (existing_idx >= 0) {
+        pid_t old_pid = registry[existing_idx].pid;
+        if (kill(old_pid, 0) == 0 || errno != ESRCH) {
+            /* Old process is still alive (or we lack permission to check) — real duplicate */
+            pthread_rwlock_unlock(&registry_lock);
+            sm_log(SM_LOG_ERROR, "registry: '%s' already registered (pid=%d alive)",
+                   entry->name, (int)old_pid);
+            return SM_ERR_EXISTS;
+        }
+        /* Stale entry: old process is dead. Remove it and allow re-registration. */
+        hash_remove(entry->name);
+        for (int i = existing_idx; i < registry_count - 1; i++)
+            registry[i] = registry[i + 1];
+        memset(&registry[registry_count - 1], 0, sizeof(service_entry_t));
+        registry_count--;
+        hash_rebuild();
+        sm_log(SM_LOG_WARN, "registry: replaced stale '%s' entry (dead pid=%d)",
+               entry->name, (int)old_pid);
     }
 
     if (registry_count >= SM_MAX_SERVICES) {

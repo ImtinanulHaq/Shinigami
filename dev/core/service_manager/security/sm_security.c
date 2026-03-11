@@ -13,20 +13,29 @@
 
 #include <errno.h>
 #include <grp.h>
-#include <linux/capability.h>
-#include <linux/filter.h>
-#include <linux/seccomp.h>
 #include <pwd.h>
 #include <signal.h> /* SIGTERM, SIGKILL, SIGCHLD */
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
-#include <sys/syscall.h>
 #include <unistd.h>
+
+/*
+ * Linux-specific kernel interfaces — seccomp BPF, capabilities, prctl.
+ * These headers are guarded so the file compiles on any POSIX system
+ * (cross-compilation validation, static analysis on macOS, etc.).
+ * At runtime the daemon requires Linux ≥ 3.17 for the full seccomp API.
+ */
+#ifdef __linux__
+#  include <linux/capability.h>
+#  include <linux/filter.h>
+#  include <linux/seccomp.h>
+#  include <sys/prctl.h>
+#  include <sys/syscall.h>
+#endif /* __linux__ */
 
 /* ── PRIVILEGE DROP ───────────────────────────────────────────────────────────
  */
@@ -135,6 +144,8 @@ int sm_set_resource_limits(void) {
 
 /* ── SECCOMP FILTER ───────────────────────────────────────────────────────────
  */
+
+#ifdef __linux__
 
 /*
  * Helper macro: allow one syscall number and fall through to the next rule.
@@ -281,6 +292,16 @@ int sm_setup_seccomp(void) {
          sizeof(filter) / sizeof(filter[0]));
   return 0;
 }
+
+#else  /* !__linux__ */
+
+int sm_setup_seccomp(void)
+{
+    sm_log(SM_LOG_WARN, "security: seccomp not supported on this platform — skipping");
+    return 0;
+}
+
+#endif /* __linux__ */
 
 /* ── FILESYSTEM SANDBOX ───────────────────────────────────────────────────────
  */

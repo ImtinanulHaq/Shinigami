@@ -5,6 +5,7 @@
  */
 
 #include "../infrastructure/sm_connection_pool.h"
+#include "../infrastructure/sm_socket.h"
 #include "../observability/sm_logging.h"
 #include <stdlib.h>
 #include <pthread.h>
@@ -16,7 +17,7 @@
 #include <errno.h>
 #include <time.h>
 
-#define SOCKET_PATH "/run/servicemanager.sock"
+/* Socket path resolved at runtime from sm_socket module — never hardcoded. */
 
 /*
  * Each slot tracks the fd and when it was last used.
@@ -53,7 +54,8 @@ static int create_connection(void)
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, sm_socket_get_path(), sizeof(addr.sun_path) - 1);
+    addr.sun_path[sizeof(addr.sun_path) - 1] = '\0';
 
     if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         sm_log(SM_LOG_WARN, "connpool: connect() failed: %s", strerror(errno));

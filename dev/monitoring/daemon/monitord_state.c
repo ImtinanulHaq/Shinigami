@@ -99,7 +99,7 @@ void monitord_state_serialize_snapshot(monitord_state_t *state,
     memcpy(&snapshot->sysinfo, &state->sysinfo, sizeof(sysinfo_metrics_t));
     memcpy(&snapshot->sm, &state->sm, sizeof(sm_metrics_t));
     memcpy(&snapshot->watchdog, &state->watchdog, sizeof(watchdog_metrics_t));
-    memcpy(snapshot->hal, &state->hal, sizeof(hal_metrics_t) * HAL_MAX_DEVICES);
+    memcpy(snapshot->hal, state->hal, sizeof(hal_metrics_t) * HAL_MAX_DEVICES);
     memcpy(snapshot->services, state->services,
            sizeof(service_metrics_t) * SERVICE_MAX);
     memcpy(snapshot->pools, state->pools,

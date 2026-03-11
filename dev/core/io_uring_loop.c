@@ -14,7 +14,9 @@
  * and is NOT used here.
  */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "io_uring_loop.h"
 
 #include <liburing.h>

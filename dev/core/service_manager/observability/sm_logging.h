@@ -14,7 +14,7 @@ typedef enum {
 } sm_log_level_t;
 
 /* Log file configuration */
-#define SM_LOG_FILE         "/var/log/servicemanager.log"
+#define SM_LOG_FILE         "/var/log/middleware/servicemanager.log"
 #define SM_LOG_MAX_SIZE     (10 * 1024 * 1024)  /* 10 MB per file */
 #define SM_LOG_BACKUP_COUNT 5                    /* keep 5 rotated files */
 #define SM_LOG_BUFFER_SIZE  4096                 /* max formatted message size */

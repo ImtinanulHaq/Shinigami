@@ -113,7 +113,7 @@ int ring_buffer_write(rb_handle_t* h, const void* item)
     atomic_store_explicit(&rb->head, next_head, memory_order_release);
 
     uint64_t one = 1;
-    (void)write(h->notify_fd, &one, sizeof(one));  // wake up reader
+    ssize_t __attribute__((unused)) _ign = write(h->notify_fd, &one, sizeof(one));  // wake up reader
     return RB_SUCCESS;
 }
 

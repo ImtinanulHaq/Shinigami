@@ -807,7 +807,7 @@ static int sensor_control(hw_device_t *device_ptr, uint32_t control_command,
       priv->offset_y = -y;
       priv->offset_z = -z;
       printf("[sensor_hal] calibrated: offsets x=%.4f y=%.4f z=%.4f\n",
-             priv->offset_x, priv->offset_y, priv->offset_z);
+             (double)priv->offset_x, (double)priv->offset_y, (double)priv->offset_z);
     }
     return HAL_SUCCESS;
 

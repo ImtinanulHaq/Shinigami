@@ -13,7 +13,7 @@
 #include <pthread.h>
 #include <time.h>
 
-#define DEFAULT_PERSISTENCE_FILE "/var/lib/servicemanager/registry.dat"
+#define DEFAULT_PERSISTENCE_FILE "/var/lib/middleware/registry.dat"
 #define SM_REGISTRY_MAX 32  /* Must match sm_registry.c */
 
 static pthread_t autosave_thread = 0;

@@ -1,0 +1,69 @@
+#!/bin/sh
+# =============================================================================
+# packaging/deb/prerm
+# Debian maintainer script: runs BEFORE package files are removed.
+# =============================================================================
+set -e
+
+PACKAGE="linux-middleware"
+
+# Service names managed by this package
+SERVICES="sm_daemon monitord audio_service camera_service gpio_service sensor_service mw_tui"
+
+# ---------------------------------------------------------------------------
+case "$1" in
+    remove|deconfigure)
+        # ── Stop all running middleware processes ─────────────────────────
+        for svc in $SERVICES; do
+            if command -v pkill >/dev/null 2>&1; then
+                pkill -x "${svc}" 2>/dev/null || true
+            fi
+        done
+
+        # Allow a brief grace period before the package files are removed
+        sleep 1
+
+        # SIGKILL any stragglers
+        for svc in $SERVICES; do
+            if command -v pkill >/dev/null 2>&1; then
+                pkill -KILL -x "${svc}" 2>/dev/null || true
+            fi
+        done
+
+        # ── Remove stale sockets ──────────────────────────────────────────
+        rm -f /tmp/servicemanager.sock \
+              /tmp/middleware_monitor.sock \
+              /run/servicemanager.sock \
+              /run/middleware/servicemanager.sock 2>/dev/null || true
+
+        # ── Disable systemd unit if present ───────────────────────────────
+        if command -v systemctl >/dev/null 2>&1; then
+            if systemctl is-active --quiet middleware 2>/dev/null; then
+                systemctl stop middleware || true
+            fi
+            if systemctl is-enabled --quiet middleware 2>/dev/null; then
+                systemctl disable middleware || true
+            fi
+        fi
+        ;;
+
+    upgrade)
+        # On upgrade: stop services so new binaries can be placed
+        for svc in $SERVICES; do
+            if command -v pkill >/dev/null 2>&1; then
+                pkill -x "${svc}" 2>/dev/null || true
+            fi
+        done
+        sleep 1
+        ;;
+
+    failed-upgrade)
+        ;;
+
+    *)
+        echo "prerm called with an unknown argument: '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

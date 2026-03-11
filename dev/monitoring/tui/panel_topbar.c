@@ -18,7 +18,6 @@ void panel_topbar_render(const mon_snapshot_t *snapshot, int y, int cols)
     /* System health */
     int health = health_compute_system_score(snapshot->services, SERVICE_MAX);
     const char *grade = health_score_to_grade(health);
-    int color = health_score_to_color(health);
 
     char health_str[64];
     snprintf(health_str, sizeof(health_str), "Health: %s (%d/100)", grade, health);
@@ -27,10 +26,10 @@ void panel_topbar_render(const mon_snapshot_t *snapshot, int y, int cols)
     char sysinfo_str[128];
     snprintf(sysinfo_str, sizeof(sysinfo_str),
              "CPU: %.1f%% | RAM: %lu/%lu MB | Load: %.2f",
-             snapshot->sysinfo.cpu_total_pct,
+             (double)snapshot->sysinfo.cpu_total_pct,
              snapshot->sysinfo.ram_used_bytes / 1048576,
              snapshot->sysinfo.ram_total_bytes / 1048576,
-             snapshot->sysinfo.load_1);
+             (double)snapshot->sysinfo.load_1);
 
     /* Timestamp */
     time_t now = time(NULL);

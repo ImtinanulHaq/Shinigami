@@ -86,8 +86,8 @@ endmacro()
 if(MW_HAL_AUDIO)
     mw_hal_layer(audio layers/audio "layers/audio/audio_hal.c")
     target_link_libraries(mw_hal_audio PUBLIC ALSA::ALSA)
-    target_compile_definitions(mw_hal_audio PUBLIC MW_HAL_AUDIO=1)
-    message(STATUS "[MW] HAL: audio enabled")
+    target_compile_definitions(mw_hal_audio PUBLIC MW_HAL_AUDIO=1 HAVE_ALSA=1)
+    message(STATUS "[MW] HAL: audio enabled (ALSA backend)")
 endif()
 
 # ---------------------------------------------------------------------------
