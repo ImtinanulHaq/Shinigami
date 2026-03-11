@@ -217,7 +217,7 @@ add_subdirectory(dev/monitoring)    # monitord daemon + TUI
 #   find_package(linux_middleware REQUIRED COMPONENTS core hal proxy)
 # ---------------------------------------------------------------------------
 install(
-    TARGETS mw_compile_opts mw_version_hdr
+    TARGETS mw_compile_opts mw_version_hdr mw_platform_checks
     EXPORT  linux_middleware_targets
 )
 
