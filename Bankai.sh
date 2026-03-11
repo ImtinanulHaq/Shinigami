@@ -545,7 +545,9 @@ cmd_start() {
             --config "${CONFIG_DIR}/${svc}.ini" || true
     done
 
-    # 3. Monitord
+    # 3. Monitord — kill any stale instance first to free the HTTP port
+    pkill -x monitord 2>/dev/null || true
+    sleep 0.3
     start_process "monitord" \
         "${INSTALL_DIR}/sbin/monitord" \
         --config "${CONFIG_DIR}/monitord.ini" \

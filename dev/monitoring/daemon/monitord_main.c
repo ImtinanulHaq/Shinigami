@@ -137,21 +137,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Start HTTP server */
+    /* Start HTTP server (non-fatal — TUI uses Unix socket, not HTTP) */
     monitord_http_t *http = monitord_http_start(&config, &state);
     if (!http) {
-        fprintf(stderr, "Failed to start HTTP server\n");
-        monitord_server_stop(server);
-        collector_stop_all(5000);
-        monitord_state_destroy(&state);
-        return 1;
+        fprintf(stderr, "[monitord] WARNING: HTTP server failed to start (port %u in use?) "
+                "— continuing without Prometheus metrics\n", config.http_port);
     }
 
     /* Install signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    printf("[monitord] Running. Press Ctrl+C to stop.\n");
+    printf("[monitord] Running (Unix socket: %s). Press Ctrl+C to stop.\n",
+           config.unix_socket_path);
 
     /* Main loop */
     while (!g_stop_flag) {
