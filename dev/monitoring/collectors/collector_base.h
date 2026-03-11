@@ -19,11 +19,11 @@
  */
 #pragma once
 
-#include <stdint.h>
-#include <stddef.h>
+#include "../protocol/monitor_ipc_protocol.h"
 #include <pthread.h>
 #include <signal.h>
-#include "../protocol/monitor_ipc_protocol.h"
+#include <stddef.h>
+#include <stdint.h>
 
 /* Forward declarations */
 struct monitord_state;
@@ -36,8 +36,8 @@ typedef struct collector collector_t;
  *         Return 0 on success; collector transitions CONNECTING→SYNCING.
  *         Return -1 to stay in CONNECTING (will retry after interval).
  */
-typedef int  (*collector_connect_fn)(collector_t *self,
-                                      struct monitord_state *state);
+typedef int (*collector_connect_fn)(collector_t *self,
+                                    struct monitord_state *state);
 
 /**
  * @brief  Called every interval_ms when LIVE.
@@ -45,49 +45,49 @@ typedef int  (*collector_connect_fn)(collector_t *self,
  *         Return 0 on success (stays LIVE).
  *         Return -1 on transient error (transitions to STALE then OFFLINE).
  */
-typedef int  (*collector_tick_fn)(collector_t *self,
-                                   struct monitord_state *state);
+typedef int (*collector_tick_fn)(collector_t *self,
+                                 struct monitord_state *state);
 
-/**
- * @brief  Called when transitioning to OFFLINE (socket closed, etc.).
- *         Release any component resources (close fd, unmap shm, etc.).
+typedef int (*collector_disconnect_fn)(collector_t *self,
+                                       struct monitord_state *state);
+
+/* ── Collector descriptor ───────────────────────────────────────────────────
  */
-typedef void (*collector_disconnect_fn)(collector_t *self);
 
-/* ── Collector descriptor ─────────────────────────────────────────────────── */
-
-#define COLLECTOR_PRIV_SIZE  256   /**< Private data area inside each collector. */
+#define COLLECTOR_PRIV_SIZE                                                    \
+  256 /**< Private data area inside each collector.                            \
+       */
 
 struct collector {
-    /* Identity */
-    char                 name[32];
-    uint32_t             index;         /**< Position in the global table. */
+  /* Identity */
+  char name[32];
+  uint32_t index; /**< Position in the global table. */
 
-    /* Timing */
-    uint32_t             interval_ms;   /**< Normal collection interval. */
-    uint32_t             retry_ms;      /**< Retry interval when OFFLINE (default 2000). */
-    uint64_t             last_tick_ms;  /**< Monotonic ms of last successful tick. */
-    uint64_t             last_update_ms;/**< Monotonic ms of last state write. */
+  /* Timing */
+  uint32_t interval_ms;    /**< Normal collection interval. */
+  uint32_t retry_ms;       /**< Retry interval when OFFLINE (default 2000). */
+  uint64_t last_tick_ms;   /**< Monotonic ms of last successful tick. */
+  uint64_t last_update_ms; /**< Monotonic ms of last state write. */
 
-    /* State machine */
-    volatile collector_state_t state;
-    uint64_t             last_state_change_ms;
-    uint64_t             last_offline_ms;
-    uint64_t             collect_count;
-    uint64_t             error_count;
-    uint32_t             consecutive_errors;
+  /* State machine */
+  volatile collector_state_t state;
+  uint64_t last_state_change_ms;
+  uint64_t last_offline_ms;
+  uint64_t collect_count;
+  uint64_t error_count;
+  uint32_t consecutive_errors;
 
-    /* Callbacks */
-    collector_connect_fn    connect;
-    collector_tick_fn       tick;
-    collector_disconnect_fn disconnect;
+  /* Callbacks */
+  collector_connect_fn connect;
+  collector_tick_fn tick;
+  collector_disconnect_fn disconnect;
 
-    /* Thread control */
-    pthread_t            thread;
-    volatile sig_atomic_t stop_flag;    /**< Set to 1 to request clean shutdown. */
+  /* Thread control */
+  pthread_t thread;
+  volatile sig_atomic_t stop_flag; /**< Set to 1 to request clean shutdown. */
 
-    /* Private per-collector data (e.g. open fd, mmap ptr) */
-    uint8_t              priv[COLLECTOR_PRIV_SIZE];
+  /* Private per-collector data (e.g. open fd, mmap ptr) */
+  uint8_t priv[COLLECTOR_PRIV_SIZE];
 };
 
 /* ── Global collector table ──────────────────────────────────────────────── */
@@ -125,7 +125,8 @@ void collector_stop_all(uint32_t timeout_ms);
  * @return Number of entries written.
  */
 uint32_t collector_snapshot_info(collector_info_t *out, uint32_t max,
-                                  uint32_t *live, uint32_t *stale, uint32_t *offline);
+                                 uint32_t *live, uint32_t *stale,
+                                 uint32_t *offline);
 
 /**
  * @brief  Transition @p c to a new state, recording the timestamp.

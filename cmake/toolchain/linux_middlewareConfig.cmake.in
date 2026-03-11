@@ -1,0 +1,64 @@
+# =============================================================================
+# linux_middlewareConfig.cmake.in
+# CMake package config — used by find_package(linux_middleware).
+#
+# Downstream usage:
+#   find_package(linux_middleware 2.0 REQUIRED COMPONENTS core hal proxy)
+#   target_link_libraries(myapp PRIVATE mw::proxy mw::hal)
+# =============================================================================
+
+@PACKAGE_INIT@
+
+# ---------------------------------------------------------------------------
+# Path variables (relocated by CMake's @PACKAGE_* mechanism)
+# ---------------------------------------------------------------------------
+set_and_check(linux_middleware_INCLUDE_DIR "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@")
+set_and_check(linux_middleware_LIB_DIR     "@PACKAGE_CMAKE_INSTALL_LIBDIR@")
+
+# ---------------------------------------------------------------------------
+# Required external dependencies — must find them before importing our targets
+# ---------------------------------------------------------------------------
+include(CMakeFindDependencyMacro)
+
+find_dependency(Threads REQUIRED)
+find_dependency(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
+find_dependency(LibUring 2.3 REQUIRED)
+find_dependency(ALSA REQUIRED)
+find_dependency(LibSeccomp 2.5 REQUIRED)
+find_dependency(LibCap 2.0 REQUIRED)
+
+# ---------------------------------------------------------------------------
+# Import the exported targets
+# ---------------------------------------------------------------------------
+include("${CMAKE_CURRENT_LIST_DIR}/linux_middlewareTargets.cmake")
+
+# ---------------------------------------------------------------------------
+# Component checking
+# ---------------------------------------------------------------------------
+set(_mw_components core hal security sm proxy monitoring)
+
+foreach(_comp ${linux_middleware_FIND_COMPONENTS})
+    if(NOT _comp IN_LIST _mw_components)
+        set(linux_middleware_NOT_FOUND_MESSAGE
+            "linux_middleware: unknown component '${_comp}'. "
+            "Valid components: ${_mw_components}")
+        set(linux_middleware_FOUND FALSE)
+        return()
+    endif()
+
+    # Map component name to the ALIAS target
+    if(NOT TARGET mw::${_comp})
+        set(linux_middleware_${_comp}_FOUND FALSE)
+        if(linux_middleware_FIND_REQUIRED_${_comp})
+            set(linux_middleware_NOT_FOUND_MESSAGE
+                "linux_middleware: required component '${_comp}' not found "
+                "(target mw::${_comp} not in this installation).")
+            set(linux_middleware_FOUND FALSE)
+            return()
+        endif()
+    else()
+        set(linux_middleware_${_comp}_FOUND TRUE)
+    endif()
+endforeach()
+
+check_required_components(linux_middleware)

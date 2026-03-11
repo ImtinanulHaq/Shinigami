@@ -1,0 +1,255 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+
+  "configurePresets": [
+
+    {
+      "name": "base",
+      "hidden": true,
+      "description": "Shared settings inherited by all presets",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "MW_USE_CCACHE": "ON"
+      },
+      "environment": {
+        "NINJA_STATUS": "[%f/%t %e] "
+      }
+    },
+
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Debug build — full symbols, no optimisation, ASan+UBSan",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":      "Debug",
+        "MW_SANITIZE":           "asan+ubsan",
+        "MW_BUILD_TESTS":        "ON",
+        "MW_BUILD_EXAMPLES":     "ON",
+        "MW_WARNINGS_AS_ERRORS": "OFF"
+      }
+    },
+
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Production release — hardened, LTO, no sanitizers",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":      "Release",
+        "MW_ENABLE_LTO":         "ON",
+        "MW_SANITIZE":           "",
+        "MW_BUILD_TESTS":        "OFF",
+        "MW_BUILD_EXAMPLES":     "OFF",
+        "MW_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+
+    {
+      "name": "relwithdebinfo",
+      "displayName": "RelWithDebInfo",
+      "description": "Release with debug symbols — default for staging",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":      "RelWithDebInfo",
+        "MW_SANITIZE":           "",
+        "MW_BUILD_TESTS":        "ON",
+        "MW_WARNINGS_AS_ERRORS": "OFF"
+      }
+    },
+
+    {
+      "name": "tsan",
+      "displayName": "ThreadSanitizer",
+      "description": "TSan build — catches data races in threaded code",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":  "RelWithDebInfo",
+        "MW_SANITIZE":       "tsan",
+        "MW_BUILD_TESTS":    "ON"
+      }
+    },
+
+    {
+      "name": "msan",
+      "displayName": "MemorySanitizer (Clang only)",
+      "description": "MSan build — detects reads of uninitialised memory",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":  "Debug",
+        "MW_SANITIZE":       "msan",
+        "CMAKE_C_COMPILER":  "clang",
+        "CMAKE_CXX_COMPILER":"clang++",
+        "MW_BUILD_TESTS":    "ON"
+      }
+    },
+
+    {
+      "name": "ci",
+      "displayName": "CI",
+      "description": "CI pipeline preset — strict warnings, all tests, no examples",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":      "RelWithDebInfo",
+        "MW_SANITIZE":           "asan+ubsan",
+        "MW_BUILD_TESTS":        "ON",
+        "MW_BUILD_EXAMPLES":     "OFF",
+        "MW_WARNINGS_AS_ERRORS": "ON",
+        "MW_CLANG_TIDY":         "ON"
+      }
+    },
+
+    {
+      "name": "ci-clang",
+      "displayName": "CI (Clang)",
+      "description": "CI pipeline with Clang — for cross-compiler validation",
+      "inherits": "ci",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER":  "clang",
+        "CMAKE_CXX_COMPILER":"clang++"
+      }
+    },
+
+    {
+      "name": "cross-aarch64",
+      "displayName": "Cross — AArch64",
+      "description": "Cross-compile for AArch64 (ARM64) embedded targets",
+      "inherits": "base",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/linux-aarch64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":  "Release",
+        "MW_ENABLE_LTO":     "ON",
+        "MW_BUILD_TESTS":    "OFF"
+      }
+    },
+
+    {
+      "name": "cross-arm",
+      "displayName": "Cross — ARM32",
+      "description": "Cross-compile for ARMv7-A embedded targets",
+      "inherits": "base",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/linux-arm.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":  "Release",
+        "MW_ENABLE_LTO":     "ON",
+        "MW_BUILD_TESTS":    "OFF"
+      }
+    },
+
+    {
+      "name": "no-monitoring",
+      "displayName": "No Monitoring",
+      "description": "Headless build — services + SM only, no monitord/TUI",
+      "inherits": "release",
+      "cacheVariables": {
+        "MW_BUILD_MONITORING": "OFF"
+      }
+    },
+
+    {
+      "name": "no-proxy",
+      "displayName": "No Proxy",
+      "description": "Daemon-only build — no C++ proxy library",
+      "inherits": "release",
+      "cacheVariables": {
+        "MW_BUILD_PROXY":      "OFF",
+        "MW_BUILD_MONITORING": "OFF"
+      }
+    },
+
+    {
+      "name": "static-analysis",
+      "displayName": "Static Analysis",
+      "description": "Full static analysis — clang-tidy + cppcheck",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "MW_CLANG_TIDY":    "ON",
+        "MW_CPPCHECK":      "ON",
+        "MW_BUILD_TESTS":   "OFF"
+      }
+    }
+  ],
+
+  "buildPresets": [
+    {
+      "name": "relwithdebinfo",
+      "displayName": "Build RelWithDebInfo",
+      "configurePreset": "relwithdebinfo",
+      "jobs": 0
+    },
+    {
+      "name": "debug",
+      "displayName": "Build Debug",
+      "configurePreset": "debug",
+      "jobs": 0
+    },
+    {
+      "name": "release",
+      "displayName": "Build Release",
+      "configurePreset": "release",
+      "jobs": 0
+    },
+    {
+      "name": "ci",
+      "displayName": "Build CI",
+      "configurePreset": "ci",
+      "jobs": 0
+    },
+    {
+      "name": "cross-aarch64",
+      "displayName": "Build AArch64",
+      "configurePreset": "cross-aarch64",
+      "jobs": 0
+    }
+  ],
+
+  "testPresets": [
+    {
+      "name": "debug",
+      "displayName": "Test Debug",
+      "configurePreset": "debug",
+      "output": { "verbosity": "extra", "outputOnFailure": true },
+      "execution": { "timeout": 120, "noTestsAction": "error" }
+    },
+    {
+      "name": "ci",
+      "displayName": "Test CI",
+      "configurePreset": "ci",
+      "output": { "verbosity": "verbose", "outputOnFailure": true },
+      "execution": {
+        "timeout": 300,
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    }
+  ],
+
+  "packagePresets": [
+    {
+      "name": "release-deb",
+      "displayName": "Package .deb",
+      "configurePreset": "release",
+      "generators": ["DEB"],
+      "packageDirectory": "${sourceDir}/packages"
+    },
+    {
+      "name": "release-rpm",
+      "displayName": "Package .rpm",
+      "configurePreset": "release",
+      "generators": ["RPM"],
+      "packageDirectory": "${sourceDir}/packages"
+    },
+    {
+      "name": "release-tgz",
+      "displayName": "Package .tar.gz",
+      "configurePreset": "release",
+      "generators": ["TGZ"],
+      "packageDirectory": "${sourceDir}/packages"
+    }
+  ]
+}

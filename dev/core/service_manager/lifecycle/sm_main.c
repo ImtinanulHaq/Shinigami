@@ -291,6 +291,13 @@ int sm_run(void) {
     return -1;
   }
 
+  /* * FIX: Load configuration FIRST so the crypto subsystem
+   * can read the verify_key_file path from the config.
+   */
+  if (sm_config_load(NULL) < 0) {
+    sm_log(SM_LOG_WARN, "main: config load failed, using defaults");
+  }
+
   /* Load or generate the HMAC key BEFORE dropping privileges */
   if (sm_crypto_init() < 0) {
     sm_log(SM_LOG_ERROR, "main: crypto init failed");
@@ -310,11 +317,6 @@ int sm_run(void) {
     sm_log(SM_LOG_ERROR, "main: subsystem init failed");
     cleanup();
     return -1;
-  }
-
-  /* Initialize new subsystems */
-  if (sm_config_load(NULL) < 0) {
-    sm_log(SM_LOG_WARN, "main: config load failed, using defaults");
   }
 
   if (sm_metrics_init() < 0) {
