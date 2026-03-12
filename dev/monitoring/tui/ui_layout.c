@@ -40,6 +40,22 @@
 static int g_scroll_offset = 0;
 static int g_current_tab   = 0;
 
+/* ── Own rolling CPU history (filled every render, 64 points) ──────────
+ *  Uses the daemon's cpu_total_pct each frame so the graph always has
+ *  real data regardless of whether cpu_history[] is populated.          */
+#define TUI_CPU_HIST_LEN 64
+static float  g_cpu_hist[TUI_CPU_HIST_LEN];  /* oldest → newest, right */
+static int    g_cpu_hist_filled = 0;
+
+static void cpu_hist_push(float pct)
+{
+    /* Shift left and append */
+    for (int i = 0; i < TUI_CPU_HIST_LEN - 1; i++)
+        g_cpu_hist[i] = g_cpu_hist[i + 1];
+    g_cpu_hist[TUI_CPU_HIST_LEN - 1] = pct;
+    if (g_cpu_hist_filled < TUI_CPU_HIST_LEN) g_cpu_hist_filled++;
+}
+
 /* Tab 0 = Home dashboard (3x2 grid), Tabs 1..10 = legacy detail panels */
 static const char *TAB_NAMES[] = {
     "Home",
@@ -198,22 +214,34 @@ static void render_health(const mon_snapshot_t *s,
         mvaddch(row, x + 2, '[');
         attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
 
-        /* filled / empty blocks */
-        attron(COLOR_PAIR(col) | A_BOLD);
+        /* filled / empty blocks using ncurses ACS chars */
         if (do_blink) attron(A_BLINK);
-        for (int j = 0; j < bar_w; j++)
-            addch(j < filled ? '#' : '.');
+        for (int j = 0; j < bar_w; j++) {
+            if (j < filled) {
+                attron(COLOR_PAIR(col) | A_BOLD);
+                addch(ACS_BLOCK);
+                attroff(A_BOLD | COLOR_PAIR(col));
+            } else {
+                attron(COLOR_PAIR(COLOR_PAIR_BORDER));
+                addch(ACS_CKBOARD);
+                attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
+            }
+        }
         if (do_blink) attroff(A_BLINK);
-        attroff(A_BOLD | COLOR_PAIR(col));
 
-        /* "]" + score */
+        /* "]" score  name */
         attron(COLOR_PAIR(COLOR_PAIR_BORDER));
         addch(']');
         attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
 
         attron(COLOR_PAIR(col) | A_BOLD);
-        printw(" %3d", score);
+        printw(" %3d ", score);
         attroff(A_BOLD | COLOR_PAIR(col));
+
+        /* Service name dim after score */
+        attron(COLOR_PAIR(COLOR_PAIR_DIM));
+        printw("%.8s", sv->name);
+        attroff(COLOR_PAIR(COLOR_PAIR_DIM));
 
         row++;
     }
@@ -228,53 +256,71 @@ static void render_health(const mon_snapshot_t *s,
 static void render_cpu_graph(const mon_snapshot_t *s,
                              int y, int h, int x, int w)
 {
+    /* Push current CPU value into our own rolling buffer every frame */
+    cpu_hist_push(s->sysinfo.cpu_total_pct);
+
     draw_box(y, x, h, w);
     draw_panel_title(y, x, w, "CPU TOTAL");
 
-    /* Current value on the right side of the title row */
+    /* Current value — right side of title row, bold green */
     char vbuf[16];
     snprintf(vbuf, sizeof(vbuf), "%.1f%%", (double)s->sysinfo.cpu_total_pct);
     attron(COLOR_PAIR(COLOR_PAIR_GOOD) | A_BOLD);
     mvprintw(y, x + w - (int)strlen(vbuf) - 2, "%s", vbuf);
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_GOOD));
 
-    int graph_h = h - 2;   /* rows inside the border */
-    int graph_w = w - 2;   /* cols inside the border */
-    if (graph_h <= 0 || graph_w <= 0) return;
+    /* Reserve 4 cols on the right for Y-axis labels */
+    int label_w = 5;   /* " 100%" */
+    int graph_h = h - 2;
+    int graph_w = w - 2 - label_w;
+    if (graph_h <= 1 || graph_w <= 2) return;
 
-    /* Copy history out of the packed struct to avoid -Waddress-of-packed-member */
-    float hist[SPARKLINE_LEN];
-    for (int i = 0; i < SPARKLINE_LEN; i++)
-        hist[i] = s->sysinfo.cpu_history[i];
+    /* Draw dim horizontal grid lines at 75%, 50%, 25% */
+    attron(COLOR_PAIR(COLOR_PAIR_BORDER));
+    int row_75 = y + 1 + (int)((1.0f - 0.75f) * graph_h);
+    int row_50 = y + 1 + (int)((1.0f - 0.50f) * graph_h);
+    int row_25 = y + 1 + (int)((1.0f - 0.25f) * graph_h);
+    for (int c = x + 1; c < x + 1 + graph_w; c++) {
+        mvaddch(row_75, c, ACS_HLINE);
+        mvaddch(row_50, c, ACS_HLINE);
+        mvaddch(row_25, c, ACS_HLINE);
+    }
+    attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
 
-    attron(COLOR_PAIR(COLOR_PAIR_GOOD) | A_BOLD);
+    /* Y-axis labels */
+    attron(COLOR_PAIR(COLOR_PAIR_DEFAULT));
+    mvprintw(y + 1,       x + 1 + graph_w, " 100%%");
+    mvprintw(row_75,      x + 1 + graph_w, "  75%%");
+    mvprintw(row_50,      x + 1 + graph_w, "  50%%");
+    mvprintw(row_25,      x + 1 + graph_w, "  25%%");
+    mvprintw(y + h - 2,   x + 1 + graph_w, "   0%%");
+    attroff(COLOR_PAIR(COLOR_PAIR_DEFAULT));
 
+    /* Draw bars using our own rolling buffer */
     for (int col = 0; col < graph_w; col++) {
-        int   src = SPARKLINE_LEN - graph_w + col;
-        float pct = (src >= 0 && src < SPARKLINE_LEN) ? hist[src] : 0.0f;
+        int   src = TUI_CPU_HIST_LEN - graph_w + col;
+        float pct = (src >= 0) ? g_cpu_hist[src] : 0.0f;
         if (pct < 0.0f)   pct = 0.0f;
         if (pct > 100.0f) pct = 100.0f;
 
         int bar_h = (int)(pct / 100.0f * (float)graph_h + 0.5f);
         if (bar_h > graph_h) bar_h = graph_h;
 
+        /* Color the bar: green < 60%, yellow 60-80%, red > 80% */
+        int bar_col = (pct >= 80.0f) ? COLOR_PAIR_CRITICAL
+                    : (pct >= 60.0f) ? COLOR_PAIR_WARNING
+                    :                  COLOR_PAIR_GOOD;
+
         for (int row = 0; row < graph_h; row++) {
-            int depth = graph_h - 1 - row;  /* 0 = bottom row */
-            int py  = y + 1 + row;
-            int px  = x + 1 + col;
-            mvaddch(py, px, depth < bar_h ? '|' : ' ');
+            int depth = graph_h - 1 - row;  /* 0 = bottom */
+            int py = y + 1 + row;
+            int px = x + 1 + col;
+            if (depth < bar_h) {
+                attron(COLOR_PAIR(bar_col) | A_BOLD);
+                mvaddch(py, px, ACS_BLOCK);
+                attroff(A_BOLD | COLOR_PAIR(bar_col));
+            } /* else grid lines already drawn, leave them */
         }
-    }
-
-    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_GOOD));
-
-    /* Y-axis hints */
-    if (graph_h >= 3) {
-        attron(COLOR_PAIR(COLOR_PAIR_DEFAULT));
-        mvprintw(y + 1,              x + w - 5, "100%%");
-        mvprintw(y + 1 + graph_h/2,  x + w - 4, " 50%%");
-        mvprintw(y + h - 2,          x + w - 3, "  0%%");
-        attroff(COLOR_PAIR(COLOR_PAIR_DEFAULT));
     }
 }
 
@@ -300,8 +346,8 @@ static void render_memory(const mon_snapshot_t *s,
             max_rss = s->services[i].rss_bytes;
     }
 
-    int name_w = 6;   /* "audio " */
-    int val_w  = 7;   /* " 999MB" */
+    int name_w = 10;  /* "ServiceMgr" — up to 10 chars */
+    int val_w  = 6;   /* "999MB" */
     /* inner(w-4) - name - space - "["…"]"(2) - space - val */
     int bar_w  = (w - 4) - name_w - 1 - 2 - 1 - val_w;
     if (bar_w < 4) bar_w = 4;
@@ -328,10 +374,17 @@ static void render_memory(const mon_snapshot_t *s,
         attron(COLOR_PAIR(COLOR_PAIR_BORDER));
         addch('[');
         attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
-        attron(COLOR_PAIR(bar_col) | A_BOLD);
-        for (int j = 0; j < bar_w; j++)
-            addch(j < filled ? '#' : '.');
-        attroff(A_BOLD | COLOR_PAIR(bar_col));
+        for (int j = 0; j < bar_w; j++) {
+            if (j < filled) {
+                attron(COLOR_PAIR(bar_col) | A_BOLD);
+                addch(ACS_BLOCK);
+                attroff(A_BOLD | COLOR_PAIR(bar_col));
+            } else {
+                attron(COLOR_PAIR(COLOR_PAIR_BORDER));
+                addch(ACS_CKBOARD);
+                attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
+            }
+        }
         attron(COLOR_PAIR(COLOR_PAIR_BORDER));
         addch(']');
         attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
@@ -479,11 +532,6 @@ static void render_sysinfo(const mon_snapshot_t *s,
     for (uint32_t i = 0; i < SERVICE_MAX; i++)
         if (s->services[i].name[0] && s->services[i].running) running++;
 
-    /* IPC broker: any service with sm_connected */
-    int ipc_ok = 0;
-    for (uint32_t i = 0; i < SERVICE_MAX; i++)
-        if (s->services[i].sm_connected) { ipc_ok = 1; break; }
-
     /* Auth: total HMAC failures */
     uint32_t hmac = 0;
     for (uint32_t i = 0; i < SERVICE_MAX; i++)
@@ -508,9 +556,9 @@ static void render_sysinfo(const mon_snapshot_t *s,
     else
         snprintf(upbuf, sizeof(upbuf), "%llus", (unsigned long long)up);
 
-    SYSROW("Services",   "%u running",  running);
-    SYSROW("IPC broker", "%s",          ipc_ok ? "OK  online" : "--  offline");
-    SYSROW("Auth",       "%s",          hmac == 0 ? "HMAC valid" : "HMAC FAIL");
+    SYSROW("Services",   "%u / %u up",  running, s->service_count);
+    SYSROW("IPC chans",  "%u active",   s->ipc_count);
+    SYSROW("Auth",       "%s",          hmac == 0 ? "HMAC OK" : "HMAC FAIL");
     SYSROW("Uptime",     "%s",          upbuf);
     SYSROW("CPU",        "%.1f%%",      (double)s->sysinfo.cpu_total_pct);
 
