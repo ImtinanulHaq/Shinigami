@@ -1,0 +1,156 @@
+Linux Middleware Platform — Open Source License
+Version 1.0, March 2026
+
+Copyright (c) 2026 Muhammad Imtinan ul Haq and Abdullah Ahmad Khan
+All rights reserved.
+
+================================================================================
+PREAMBLE
+================================================================================
+
+This software is made available as open source. Anyone is free to read, study,
+use, modify, and contribute to this project. This license exists to protect the
+original authors, ensure proper credit is always maintained, and define a clear
+and fair process for community contributions.
+
+================================================================================
+PERMISSIONS
+================================================================================
+
+Subject to the conditions stated in this license, you are granted a worldwide,
+royalty-free, non-exclusive license to:
+
+  1. Use this software in personal, academic, or commercial projects.
+  2. Read and study the source code for learning and research purposes.
+  3. Modify the source code for your own use.
+  4. Redistribute this software in original or modified form, provided all
+     conditions in the CONDITIONS section below are met.
+  5. Submit contributions back to this project through the official contribution
+     process described in the CONTRIBUTIONS section below.
+
+================================================================================
+CONDITIONS
+================================================================================
+
+The permissions above are granted only if ALL of the following conditions
+are met:
+
+  1. ATTRIBUTION REQUIRED
+     Any distribution, publication, presentation, or derivative work that
+     includes this software or any portion of it — whether in source code,
+     compiled binary, documentation, academic paper, blog post, video, or
+     any other medium — must clearly and visibly credit the original authors:
+
+         Muhammad Imtinan ul Haq
+         Abdullah Ahmad Khan
+
+     This credit must appear in:
+       - The README or equivalent documentation file.
+       - The About section, credits screen, or legal notices of any product
+         that ships this software as a component.
+       - Any academic or research paper that references or is based on this
+         work.
+
+  2. NO FALSE AUTHORSHIP
+     You may not represent yourself, your organization, or any third party
+     as the original author or creator of this software. You may not remove,
+     alter, obscure, or replace the original copyright notice or author names
+     in any source file, documentation file, or license file.
+
+     Stating that you modified the software is permitted and encouraged.
+     Stating or implying that you created it is not.
+
+  3. LICENSE PRESERVATION
+     This license file must be included in its entirety in all copies and
+     substantial portions of the software, including modified versions and
+     redistribution packages.
+
+  4. NO TRADEMARK USE
+     This license does not grant permission to use the names, logos, or
+     trademarks of the original authors for any endorsement, promotion,
+     or branding purpose without prior written permission.
+
+================================================================================
+CONTRIBUTIONS
+================================================================================
+
+Contributions to this project are welcome and encouraged. The following process
+applies to all contributions:
+
+  1. SUBMISSION
+     Contributions must be submitted as Pull Requests through the official
+     project repository. Direct commits to the main branch are not permitted
+     for external contributors.
+
+  2. REVIEW
+     All submitted Pull Requests are reviewed by the project maintainers
+     (Muhammad Imtinan ul Haq and Abdullah Ahmad Khan) before being merged.
+     Maintainers may request changes, ask for clarification, or decline a
+     contribution at their discretion.
+
+  3. OWNERSHIP OF CONTRIBUTIONS
+     By submitting a contribution, you confirm that:
+       a. You have the right to submit the code or content.
+       b. You agree that your contribution will be governed by this license.
+       c. You grant the original authors a perpetual, irrevocable, worldwide,
+          royalty-free license to use, reproduce, modify, and distribute your
+          contribution as part of this project.
+
+  4. CONTRIBUTOR CREDIT
+     Contributors whose submissions are accepted and merged will be credited
+     in the project's contributor acknowledgments. This does not transfer
+     copyright ownership or grant maintainer status.
+
+  5. CONDUCT
+     All contributors are expected to engage respectfully. Submissions that
+     introduce malicious code, violate third-party licenses, or violate the
+     conduct expectations of the project will be rejected.
+
+================================================================================
+DISCLAIMER OF WARRANTIES
+================================================================================
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+THE ORIGINAL AUTHORS DO NOT WARRANT THAT THE SOFTWARE WILL MEET YOUR
+REQUIREMENTS, OPERATE WITHOUT INTERRUPTION, OR BE FREE FROM DEFECTS OR ERRORS.
+USE OF THIS SOFTWARE IS ENTIRELY AT YOUR OWN RISK.
+
+================================================================================
+LIMITATION OF LIABILITY
+================================================================================
+
+IN NO EVENT SHALL THE ORIGINAL AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGE, OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING
+FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR ANY OTHER
+DEALINGS IN THE SOFTWARE. THIS INCLUDES, WITHOUT LIMITATION, ANY DIRECT,
+INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES.
+
+================================================================================
+TERMINATION
+================================================================================
+
+Your rights under this license terminate automatically and immediately if you
+fail to comply with any of its conditions. Upon termination, you must cease
+all use, distribution, and possession of copies of this software.
+
+The original authors reserve the right to take appropriate legal action to
+enforce this license and protect the rights of all contributors.
+
+================================================================================
+CONTACT
+================================================================================
+
+For permissions beyond the scope of this license, contribution inquiries, or
+any other correspondence, please contact the project maintainers through the
+official repository.
+
+  Repository:  https://github.com/ImtinanulHaq/Secure-Linux-Middleware
+  Maintainers: Muhammad Imtinan ul Haq
+               Abdullah Ahmad Khan
+
+================================================================================
+END OF LICENSE
+================================================================================

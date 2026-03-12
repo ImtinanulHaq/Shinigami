@@ -21,7 +21,8 @@ A production-grade embedded Linux middleware platform built in C. It manages har
 11. [How to build](#how-to-build)
 12. [How to run](#how-to-run)
 13. [Data flow — end to end](#data-flow--end-to-end)
-14. [Credits](#credits)
+15. [License](#license)
+16. [Credits](#credits)
 
 ---
 
@@ -877,6 +878,19 @@ This trace shows what happens from the moment an application asks for a sensor r
    - panel_services.c displays sensor_service row with updated CPU/RAM values
    - panel_overview.c shows system health grade
 ```
+
+---
+
+## License
+
+This project is open source and released under a custom open-source license.
+See the [LICENSE](LICENSE) file for the full terms.
+
+**Summary of key terms:**
+- You are free to use, study, modify, and contribute to this software.
+- You must credit the original authors in any distribution or derivative work.
+- You may not remove author names or claim this work as your own.
+- Contributions are welcome via Pull Request and are reviewed by the maintainers before merging.
 
 ---
 
