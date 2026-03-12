@@ -142,6 +142,34 @@ capabilities_config_t capabilities_policy_get_config(const char* service_name)
             }
         }
 
+        /* All services must be in the servicemanager group to connect to the
+         * IPC socket (/run/middleware/servicemanager.sock, mode 0660 group
+         * servicemanager).  Without this, camera/gpio/sensor/sensor services
+         * get EACCES on connect() after their privilege drop to a non-1001 GID,
+         * causing a cascade of "Permission denied" + heartbeat-failed warnings. */
+        {
+            gid_t sm_gid = 1001; /* default fallback */
+            struct group *sm_grp = getgrnam("servicemanager");
+            if (sm_grp) {
+                sm_gid = sm_grp->gr_gid;
+            } else {
+                syslog(LOG_WARNING,
+                       "[cap_policy] %s: getgrnam(\"servicemanager\") failed,"
+                       " using fallback gid=1001", service_name);
+            }
+            /* Only add if not already present (audio has recommended_gid=1001) */
+            int already = 0;
+            for (int k = 0; k < config.supplementary_gid_count; k++) {
+                if (config.supplementary_gids[k] == sm_gid) { already = 1; break; }
+            }
+            if (!already && config.supplementary_gid_count < 8) {
+                config.supplementary_gids[config.supplementary_gid_count++] = sm_gid;
+                syslog(LOG_INFO,
+                       "[cap_policy] %s: supplementary group servicemanager(%d)"
+                       " added for IPC socket access", service_name, (int)sm_gid);
+            }
+        }
+
     } else {
 
         syslog(LOG_WARNING, "[cap_policy] Unknown service '%s', using minimal privileges",
