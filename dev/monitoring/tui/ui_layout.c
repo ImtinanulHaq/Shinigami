@@ -218,12 +218,12 @@ static void render_health(const mon_snapshot_t *s,
         if (do_blink) attron(A_BLINK);
         for (int j = 0; j < bar_w; j++) {
             if (j < filled) {
-                attron(COLOR_PAIR(col) | A_BOLD);
-                addch(ACS_BLOCK);
-                attroff(A_BOLD | COLOR_PAIR(col));
+                attron(COLOR_PAIR(col) | A_BOLD | A_REVERSE);
+                addch(' ');
+                attroff(A_BOLD | A_REVERSE | COLOR_PAIR(col));
             } else {
                 attron(COLOR_PAIR(COLOR_PAIR_BORDER));
-                addch(ACS_CKBOARD);
+                addch('-');
                 attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
             }
         }
@@ -316,9 +316,9 @@ static void render_cpu_graph(const mon_snapshot_t *s,
             int py = y + 1 + row;
             int px = x + 1 + col;
             if (depth < bar_h) {
-                attron(COLOR_PAIR(bar_col) | A_BOLD);
-                mvaddch(py, px, ACS_BLOCK);
-                attroff(A_BOLD | COLOR_PAIR(bar_col));
+                attron(COLOR_PAIR(bar_col) | A_REVERSE | A_BOLD);
+                mvaddch(py, px, ' ');
+                attroff(A_BOLD | A_REVERSE | COLOR_PAIR(bar_col));
             } /* else grid lines already drawn, leave them */
         }
     }
@@ -375,13 +375,14 @@ static void render_memory(const mon_snapshot_t *s,
         addch('[');
         attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
         for (int j = 0; j < bar_w; j++) {
+            move(row, x + 2 + name_w + 1 + 1 + j);  /* x+2=name, +name_w, +1=sp, +1='[' */
             if (j < filled) {
-                attron(COLOR_PAIR(bar_col) | A_BOLD);
-                addch(ACS_BLOCK);
-                attroff(A_BOLD | COLOR_PAIR(bar_col));
+                attron(COLOR_PAIR(bar_col) | A_REVERSE | A_BOLD);
+                addch(' ');
+                attroff(A_BOLD | A_REVERSE | COLOR_PAIR(bar_col));
             } else {
                 attron(COLOR_PAIR(COLOR_PAIR_BORDER));
-                addch(ACS_CKBOARD);
+                addch('-');
                 attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
             }
         }
