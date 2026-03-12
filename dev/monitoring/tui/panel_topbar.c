@@ -33,7 +33,7 @@ void panel_topbar_render(const mon_snapshot_t *snapshot, int y, int cols)
 
     /* \u2500\u2500 Left: title \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
     attron(COLOR_PAIR(COLOR_PAIR_BORDER) | A_BOLD);
-    mvprintw(y, 1, "\xe2\x94\xbc\xe2\x94\x80 SHINIGAMI MONITOR");
+    mvprintw(y, 1, "|- SHINIGAMI MONITOR");
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_BORDER));
 
     /* \u2500\u2500 Centre: HH:MM:SS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
@@ -53,11 +53,11 @@ void panel_topbar_render(const mon_snapshot_t *snapshot, int y, int cols)
     if (cols > 12) {
         if (g_connected) {
             attron(COLOR_PAIR(COLOR_PAIR_GOOD) | A_BOLD | A_BLINK);
-            mvprintw(y, cols - 9, "\xe2\x97\x8f LIVE  ");
+            mvprintw(y, cols - 9, "* LIVE   ");
             attroff(A_BLINK | A_BOLD | COLOR_PAIR(COLOR_PAIR_GOOD));
         } else {
             attron(COLOR_PAIR(COLOR_PAIR_CRITICAL) | A_BOLD);
-            mvprintw(y, cols - 9, "\xe2\x9c\x97 DISC  ");
+            mvprintw(y, cols - 9, "x DISC   ");
             attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_CRITICAL));
         }
     }

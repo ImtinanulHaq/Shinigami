@@ -21,6 +21,16 @@
 #include "ui_engine.h"
 #include "ui_input.h"
 #include "panel_topbar.h"
+#include "panel_overview.h"
+#include "panel_services.h"
+#include "panel_hal.h"
+#include "panel_memory.h"
+#include "panel_io.h"
+#include "panel_security.h"
+#include "panel_alerts.h"
+#include "panel_logs.h"
+#include "panel_traces.h"
+#include "panel_help.h"
 #include <ncurses.h>
 #include <string.h>
 #include <stdio.h>
@@ -28,8 +38,15 @@
 
 /* scroll offset for the alerts panel (↑↓ keys) */
 static int g_scroll_offset = 0;
-/* kept for API compatibility with tui_main.c — unused in grid layout */
 static int g_current_tab   = 0;
+
+/* Tab 0 = Home dashboard (3x2 grid), Tabs 1..10 = legacy detail panels */
+static const char *TAB_NAMES[] = {
+    "Home",
+    "Overview", "Services", "HAL", "Memory",
+    "I/O", "Security", "Alerts", "Logs", "Traces", "Help",
+};
+static const int TAB_COUNT = 11;
 
 /* ═══════════════════════════════════════════════════════════════════════
  * Draw helpers
@@ -185,7 +202,7 @@ static void render_health(const mon_snapshot_t *s,
         attron(COLOR_PAIR(col) | A_BOLD);
         if (do_blink) attron(A_BLINK);
         for (int j = 0; j < bar_w; j++)
-            addstr(j < filled ? "\xe2\x96\x88" : "\xe2\x96\x91");
+            addch(j < filled ? '#' : '.');
         if (do_blink) attroff(A_BLINK);
         attroff(A_BOLD | COLOR_PAIR(col));
 
@@ -208,13 +225,6 @@ static void render_health(const mon_snapshot_t *s,
  *   Multi-row vertical bar chart using ▁▂▃▄▅▆▇█ block characters.
  *   Source: sysinfo.cpu_history[SPARKLINE_LEN] (64 points, newest last).
  * ═══════════════════════════════════════════════════════════════════════ */
-/* Eight fractional block chars (indices 0..7 → ▁..█, 0 = space). */
-static const char *s_blk[] = {
-    " ",
-    "\xe2\x96\x81", "\xe2\x96\x82", "\xe2\x96\x83", "\xe2\x96\x84",
-    "\xe2\x96\x85", "\xe2\x96\x86", "\xe2\x96\x87", "\xe2\x96\x88"
-};
-
 static void render_cpu_graph(const mon_snapshot_t *s,
                              int y, int h, int x, int w)
 {
@@ -245,23 +255,14 @@ static void render_cpu_graph(const mon_snapshot_t *s,
         if (pct < 0.0f)   pct = 0.0f;
         if (pct > 100.0f) pct = 100.0f;
 
-        float total    = pct / 100.0f * (float)graph_h;
-        int   full     = (int)total;
-        int   part_idx = (int)((total - (float)full) * 8.0f);
-        if (part_idx > 7) part_idx = 7;
+        int bar_h = (int)(pct / 100.0f * (float)graph_h + 0.5f);
+        if (bar_h > graph_h) bar_h = graph_h;
 
         for (int row = 0; row < graph_h; row++) {
-            int bot = graph_h - 1 - row;   /* 0 = bottom row */
+            int depth = graph_h - 1 - row;  /* 0 = bottom row */
             int py  = y + 1 + row;
             int px  = x + 1 + col;
-
-            if (bot < full) {
-                mvaddstr(py, px, s_blk[8]);          /* full block ▊ */
-            } else if (bot == full && part_idx > 0) {
-                mvaddstr(py, px, s_blk[part_idx]);   /* partial block */
-            } else {
-                mvaddch(py, px, ' ');
-            }
+            mvaddch(py, px, depth < bar_h ? '|' : ' ');
         }
     }
 
@@ -329,7 +330,7 @@ static void render_memory(const mon_snapshot_t *s,
         attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
         attron(COLOR_PAIR(bar_col) | A_BOLD);
         for (int j = 0; j < bar_w; j++)
-            addstr(j < filled ? "\xe2\x96\x88" : "\xe2\x96\x91");
+            addch(j < filled ? '#' : '.');
         attroff(A_BOLD | COLOR_PAIR(bar_col));
         attron(COLOR_PAIR(COLOR_PAIR_BORDER));
         addch(']');
@@ -457,15 +458,18 @@ static void render_sysinfo(const mon_snapshot_t *s,
     int row     = y + 1;
     int max_row = y + h - 2;
 
-/* Macro: label on the left, right-aligned green value */
+/* Macro: label left, value right-aligned — overlap guard prevents clobbering */
 #define SYSROW(lbl, fmt, ...) do {                                       \
     if (row > max_row) break;                                            \
+    char _sv[48]; snprintf(_sv, sizeof(_sv), fmt, ##__VA_ARGS__);       \
+    int _vx = x + w - (int)strlen(_sv) - 2;                             \
+    int _lx = x + 2;                                                     \
     attron(COLOR_PAIR(COLOR_PAIR_DIM));                                  \
-    mvprintw(row, x + 2, "%s", lbl);                                    \
+    if (_vx > _lx + 1)                                                   \
+        mvprintw(row, _lx, "%-.*s", _vx - _lx - 1, lbl);               \
     attroff(COLOR_PAIR(COLOR_PAIR_DIM));                                 \
     attron(COLOR_PAIR(COLOR_PAIR_GOOD) | A_BOLD);                       \
-    char _sv[48]; snprintf(_sv, sizeof(_sv), fmt, ##__VA_ARGS__);       \
-    mvprintw(row, x + w - (int)strlen(_sv) - 2, "%s", _sv);            \
+    if (_vx >= _lx) mvprintw(row, _vx, "%s", _sv);                     \
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_GOOD));                      \
     row++;                                                               \
 } while (0)
@@ -505,7 +509,7 @@ static void render_sysinfo(const mon_snapshot_t *s,
         snprintf(upbuf, sizeof(upbuf), "%llus", (unsigned long long)up);
 
     SYSROW("Services",   "%u running",  running);
-    SYSROW("IPC broker", "%s",          ipc_ok ? "\xe2\x9c\x93 online" : "\xe2\x9c\x97 offline");
+    SYSROW("IPC broker", "%s",          ipc_ok ? "OK  online" : "--  offline");
     SYSROW("Auth",       "%s",          hmac == 0 ? "HMAC valid" : "HMAC FAIL");
     SYSROW("Uptime",     "%s",          upbuf);
     SYSROW("CPU",        "%.1f%%",      (double)s->sysinfo.cpu_total_pct);
@@ -547,46 +551,88 @@ void ui_layout_render(const mon_snapshot_t *snapshot)
     int rows, cols;
     ui_engine_get_size(&rows, &cols);
 
-    /* ── Column geometry: ~30% | ~40% | ~30% ──────────────────────── */
-    int left_w  = cols * 30 / 100;
-    if (left_w  < 22) left_w  = 22;
-    int right_w = cols * 30 / 100;
-    if (right_w < 22) right_w = 22;
-    int center_w = cols - left_w - right_w;
-    if (center_w < 20) center_w = 20;
-
-    /* ── Row geometry ────────────────────────────────────────────── */
-    int content_top = 1;       /* row 0 = top bar   */
-    int content_bot = rows - 2;/* rows-1 = bottom bar */
-    int content_h   = content_bot - content_top;
-    if (content_h < 4) content_h = 4;
-    int top_h = content_h / 2;
-    int bot_h = content_h - top_h;
-
-    int left_x   = 0;
-    int center_x = left_w;
-    int right_x  = left_w + center_w;
-
     /* ── Top bar (row 0) ─────────────────────────────────────────── */
     panel_topbar_render(snapshot, 0, cols);
 
-    /* ── Six panels ──────────────────────────────────────────────── */
-    render_services (snapshot, content_top,         top_h, left_x,   left_w);
-    render_health   (snapshot, content_top + top_h, bot_h, left_x,   left_w);
-    render_cpu_graph(snapshot, content_top,         top_h, center_x, center_w);
-    render_memory   (snapshot, content_top + top_h, bot_h, center_x, center_w);
-    render_alerts   (snapshot, content_top,         top_h, right_x,  right_w,
-                     g_scroll_offset);
-    render_sysinfo  (snapshot, content_top + top_h, bot_h, right_x,  right_w);
+    /* ── Tab bar (row 1) ─────────────────────────────────────────── */
+    move(1, 0);
+    attron(COLOR_PAIR(COLOR_PAIR_BORDER));
+    for (int i = 0; i < cols; i++) addch(' ');
+    attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
+
+    int tx = 1;
+    for (int i = 0; i < TAB_COUNT && tx < cols - 2; i++) {
+        if (i == g_current_tab) {
+            attron(COLOR_PAIR(COLOR_PAIR_GOOD) | A_BOLD | A_REVERSE);
+        } else {
+            attron(COLOR_PAIR(COLOR_PAIR_DEFAULT));
+        }
+        mvprintw(1, tx, " %s ", TAB_NAMES[i]);
+        if (i == g_current_tab) {
+            attroff(A_BOLD | A_REVERSE | COLOR_PAIR(COLOR_PAIR_GOOD));
+        } else {
+            attroff(COLOR_PAIR(COLOR_PAIR_DEFAULT));
+        }
+        tx += (int)strlen(TAB_NAMES[i]) + 2;
+    }
 
     /* ── Bottom bar (last row) ────────────────────────────────────── */
     render_bottombar(rows - 1, cols);
+
+    /* ── Content area rows 2 .. rows-2 ───────────────────────────── */
+    int panel_y = 2;
+    int panel_h = rows - panel_y - 1;
+    if (panel_h < 2) return;
+
+    if (g_current_tab == 0) {
+        /* ── HOME: 3x2 grid dashboard ────────────────────────────── */
+        int left_w  = cols * 30 / 100;
+        if (left_w  < 22) left_w  = 22;
+        int right_w = cols * 30 / 100;
+        if (right_w < 28) right_w = 28;
+        int center_w = cols - left_w - right_w;
+        if (center_w < 20) center_w = 20;
+        /* Ensure totals don't exceed terminal width */
+        if (left_w + right_w + center_w > cols)
+            center_w = cols - left_w - right_w;
+
+        int left_x   = 0;
+        int center_x = left_w;
+        int right_x  = left_w + center_w;
+
+        int top_h = panel_h / 2;
+        int bot_h = panel_h - top_h;
+
+        render_services (snapshot, panel_y,          top_h, left_x,   left_w);
+        render_health   (snapshot, panel_y + top_h,  bot_h, left_x,   left_w);
+        render_cpu_graph(snapshot, panel_y,          top_h, center_x, center_w);
+        render_memory   (snapshot, panel_y + top_h,  bot_h, center_x, center_w);
+        render_alerts   (snapshot, panel_y,          top_h, right_x,  right_w,
+                         g_scroll_offset);
+        render_sysinfo  (snapshot, panel_y + top_h,  bot_h, right_x,  right_w);
+    } else {
+        /* ── LEGACY DETAIL PANELS ────────────────────────────────── */
+        switch (g_current_tab) {
+        case 1:  panel_overview_render (snapshot, panel_y, panel_h, cols);                   break;
+        case 2:  panel_services_render (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+        case 3:  panel_hal_render      (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+        case 4:  panel_memory_render   (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+        case 5:  panel_io_render       (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+        case 6:  panel_security_render (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+        case 7:  panel_alerts_render   (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+        case 8:  panel_logs_render     (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+        case 9:  panel_traces_render   (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+        case 10: panel_help_render     (snapshot, panel_y, panel_h, cols, g_scroll_offset);  break;
+        }
+    }
 }
 
 void ui_layout_set_tab(int tab_index)
 {
-    g_current_tab   = tab_index;
-    g_scroll_offset = 0;   /* reset alerts scroll when "switching panels" */
+    if (tab_index >= 0 && tab_index < TAB_COUNT) {
+        g_current_tab   = tab_index;
+        g_scroll_offset = 0;
+    }
 }
 
 int ui_layout_get_tab(void)

@@ -111,13 +111,13 @@ int main(int argc, char **argv)
             continue;
 
         case UI_INPUT_NEXT_TAB:
-            current_tab = (current_tab + 1) % 10;
+            current_tab = (current_tab + 1) % 11;
             ui_layout_set_tab(current_tab);
             need_redraw = 1;
             break;
 
         case UI_INPUT_PREV_TAB:
-            current_tab = (current_tab - 1 + 10) % 10;
+            current_tab = (current_tab - 1 + 11) % 11;
             ui_layout_set_tab(current_tab);
             need_redraw = 1;
             break;
@@ -127,7 +127,7 @@ int main(int argc, char **argv)
             break;
 
         default:
-            if (inp >= UI_INPUT_TAB_N && inp < UI_INPUT_TAB_N + 10) {
+            if (inp >= UI_INPUT_TAB_N && inp < UI_INPUT_TAB_N + 11) {
                 current_tab = inp - UI_INPUT_TAB_N;
                 ui_layout_set_tab(current_tab);
                 need_redraw = 1;
