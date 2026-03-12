@@ -1,6 +1,7 @@
-# Linux Middleware Platform
+# Shinigami
 
-**Version 2.1.0**
+### Linux Middleware Platform — Version 2.1.0
+### CLI Tool: Bankai
 
 A production-grade embedded Linux middleware platform built in C. It manages hardware services, enforces security policies, monitors everything in real time, and provides a clean API for applications to talk to hardware without caring about the underlying driver details.
 
@@ -8,21 +9,40 @@ A production-grade embedded Linux middleware platform built in C. It manages har
 
 ## Table of Contents
 
-1. [What this project does](#what-this-project-does)
-2. [Architecture overview](#architecture-overview)
-3. [Full directory structure](#full-directory-structure)
-4. [Module 1 — Core](#module-1--core)
-5. [Module 2 — HAL (Hardware Abstraction Layer)](#module-2--hal-hardware-abstraction-layer)
-6. [Module 3 — Security](#module-3--security)
-7. [Module 4 — Proxy](#module-4--proxy)
-8. [Module 5 — Services](#module-5--services)
-9. [Module 6 — Monitoring](#module-6--monitoring)
-10. [Build system](#build-system)
-11. [How to build](#how-to-build)
-12. [How to run](#how-to-run)
-13. [Data flow — end to end](#data-flow--end-to-end)
+1. [Project name](#project-name)
+2. [What this project does](#what-this-project-does)
+3. [Architecture overview](#architecture-overview)
+4. [Full directory structure](#full-directory-structure)
+5. [Module 1 — Core](#module-1--core)
+6. [Module 2 — HAL (Hardware Abstraction Layer)](#module-2--hal-hardware-abstraction-layer)
+7. [Module 3 — Security](#module-3--security)
+8. [Module 4 — Proxy](#module-4--proxy)
+9. [Module 5 — Services](#module-5--services)
+10. [Module 6 — Monitoring](#module-6--monitoring)
+11. [Build system](#build-system)
+12. [How to build](#how-to-build)
+13. [How to run](#how-to-run)
+14. [Data flow — end to end](#data-flow--end-to-end)
 15. [License](#license)
 16. [Credits](#credits)
+
+---
+
+## Project name
+
+**Project name:** Shinigami
+**CLI tool name:** Bankai
+
+In Japanese mythology, a Shinigami is a death god — a spirit that watches over life, detects when something has died, and brings it back. That description maps directly onto what this middleware does:
+
+- Every hardware service runs under Shinigami's watch.
+- If a service crashes, Shinigami detects it and restarts it.
+- If health degrades, Shinigami raises an alert.
+- Nothing stays dead. Every fallen service is brought back.
+
+The CLI tool that controls the entire system is called **Bankai**. In the same mythology, Bankai is the final and most powerful form a Shinigami can achieve — a complete release of its full capability. Running `Bankai.sh` gives the operator full control: start everything, stop everything, sync binaries, restart individual services. It is the most powerful command you can run against this system.
+
+The name is not decorative. It reflects the core design principle of this platform: services must not stay dead, the system must keep watching, and the operator must always have a way to take full control.
 
 ---
 
