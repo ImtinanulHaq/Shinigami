@@ -33,16 +33,33 @@ A production-grade embedded Linux middleware platform built in C. It manages har
 **Project name:** Shinigami
 **CLI tool name:** Bankai
 
-In Japanese mythology, a Shinigami is a death god — a spirit that watches over life, detects when something has died, and brings it back. That description maps directly onto what this middleware does:
+### Name origin
+
+The names **Shinigami** and **Bankai** are borrowed from the anime and manga series
+*Bleach* (created by Tite Kubo). They are entirely fictional concepts from that series
+and have no connection to any real religion, culture, or belief system. The names were
+chosen purely because their fictional meaning aligned well with what this software does.
+
+### Why these names fit
+
+In *Bleach*, a Shinigami (literally "death god" in Japanese) is a soul reaper — a being
+whose purpose is to watch over souls, detect when something has fallen, and restore order.
+That fictional concept maps precisely onto the role this middleware plays:
 
 - Every hardware service runs under Shinigami's watch.
-- If a service crashes, Shinigami detects it and restarts it.
-- If health degrades, Shinigami raises an alert.
-- Nothing stays dead. Every fallen service is brought back.
+- If a service crashes, Shinigami detects it and brings it back.
+- If health degrades, Shinigami raises an alert before things get worse.
+- Nothing stays dead. Every failed service is restarted, restored, and monitored.
 
-The CLI tool that controls the entire system is called **Bankai**. In the same mythology, Bankai is the final and most powerful form a Shinigami can achieve — a complete release of its full capability. Running `Bankai.sh` gives the operator full control: start everything, stop everything, sync binaries, restart individual services. It is the most powerful command you can run against this system.
+The CLI tool that controls the entire system is called **Bankai**. In *Bleach*, Bankai is
+the final and most powerful form a Shinigami can release — a complete, unrestricted
+use of its full ability. Running `Bankai.sh` gives the operator that same level of
+control: start everything, stop everything, sync binaries, restart individual services.
+It is the single most powerful command available against this system.
 
-The name is not decorative. It reflects the core design principle of this platform: services must not stay dead, the system must keep watching, and the operator must always have a way to take full control.
+The names are not decorative. They reflect the core design principle of the platform:
+services must not stay dead, the system must keep watching, and the operator must
+always have a way to take complete control.
 
 ---
 
