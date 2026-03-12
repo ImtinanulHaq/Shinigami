@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #define LOG_DIR        "/var/log/middleware"
 #define MAX_LOG_LINES  512
@@ -45,17 +46,12 @@ static char g_line_src[MAX_LOG_LINES][24];
 static char g_line_time[MAX_LOG_LINES][12]; /* "HH:MM:SS" or "--:--:--" */
 static int  g_line_count = 0;
 
-/* ── Extract HH:MM:SS from a log line (or return "--:--:--") ─────────── */
-static void extract_time(const char *line, char *out, int out_len)
+/* ── Extract HH:MM:SS from a log line; fall back to file mtime ────────── */
+static void extract_time(const char *line, const struct tm *fallback,
+                         char *out, int out_len)
 {
-    /* Match common patterns:
-     *   2026-03-11 21:13:01  → ISO datetime, grab the time part
-     *   [21:13:01]           → bracketed
-     *   21:13:01             → bare at any position
-     */
     const char *p = line;
     while (*p) {
-        /* Look for HH:MM:SS — two digits, colon, two digits, colon, two digits */
         if (p[0] >= '0' && p[0] <= '2' &&
             p[1] >= '0' && p[1] <= '9' &&
             p[2] == ':' &&
@@ -69,8 +65,14 @@ static void extract_time(const char *line, char *out, int out_len)
         }
         p++;
     }
-    strncpy(out, "--:--:--", (size_t)out_len - 1);
-    out[out_len - 1] = '\0';
+    /* Fallback: file modification time so timestamps are never dashes */
+    if (fallback)
+        snprintf(out, (size_t)out_len, "%02d:%02d:%02d",
+                 fallback->tm_hour, fallback->tm_min, fallback->tm_sec);
+    else {
+        strncpy(out, "--:--:--", (size_t)out_len - 1);
+        out[out_len - 1] = '\0';
+    }
 }
 
 /* ── Classify severity from line text ─────────────────────────────────── */
@@ -108,15 +110,19 @@ static void load_log(const char *path, const char *src_name, int src_col, int bu
     FILE *f = fopen(path, "r");
     if (!f) return;
 
+    /* Use file modification time as timestamp fallback for lines with no timestamp */
+    struct stat st;
+    struct tm  *file_tm = NULL;
+    if (stat(path, &st) == 0)
+        file_tm = localtime(&st.st_mtime);
+
     /* Ring buffer to keep last `budget` lines */
     int cap = (budget < 64) ? budget : 64;
     char   ring[64][LINE_CAPACITY];
     int    ring_col[64];
     int    ring_n = 0, ring_head = 0;
     char   linebuf[LINE_CAPACITY];
-
-    /* Use a ring-buffer struct to preserve time per line */
-    char ring_time[64][12];
+    char   ring_time[64][12];
 
     while (fgets(linebuf, sizeof(linebuf), f)) {
         /* Strip trailing newline */
@@ -129,7 +135,7 @@ static void load_log(const char *path, const char *src_name, int src_col, int bu
         strncpy(ring[idx], linebuf, LINE_CAPACITY - 1);
         ring[idx][LINE_CAPACITY - 1] = '\0';
         ring_col[idx] = classify_color(linebuf);
-        extract_time(linebuf, ring_time[idx], sizeof(ring_time[idx]));
+        extract_time(linebuf, file_tm, ring_time[idx], sizeof(ring_time[idx]));
         ring_head++;
         if (ring_n < cap) ring_n++;
     }
@@ -155,39 +161,66 @@ void panel_logs_render(const mon_snapshot_t *s, int y, int h, int cols, int scro
     int row = y;
     const int max_row = y + h - 1;
 
-    /* ── Header ── */
-    attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "-- Service Logs ");
-    mvhline(row, 18, ACS_HLINE, cols - 20);
-    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
+    /* ── Header: live refresh clock ── */
+    time_t now_t   = time(NULL);
+    struct tm *ntm = localtime(&now_t);
+    char now_str[12] = "--:--:--";
+    if (ntm)
+        snprintf(now_str, sizeof(now_str), "%02d:%02d:%02d",
+                 ntm->tm_hour, ntm->tm_min, ntm->tm_sec);
+
+    attron(COLOR_PAIR(COLOR_PAIR_BORDER) | A_BOLD);
+    mvprintw(row, 0, "|");
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_BORDER));
+
+    attron(COLOR_PAIR(COLOR_PAIR_HEADER) | A_BOLD);
+    mvprintw(row, 2, "-- SERVICE LOGS ");
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_HEADER));
+
+    attron(COLOR_PAIR(COLOR_PAIR_DIM));
+    mvprintw(row, 18, "Dir: %s", LOG_DIR);
+    attroff(COLOR_PAIR(COLOR_PAIR_DIM));
+
+    /* Refresh badge right-aligned */
+    attron(COLOR_PAIR(COLOR_PAIR_OK) | A_BOLD);
+    mvprintw(row, cols - 14, " LIVE %s ", now_str);
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_OK));
     row++;
 
-    /* Sub-header with legend */
-    attron(COLOR_PAIR(COLOR_PAIR_INFO));
-    mvprintw(row, 4, "Dir: %-30s  ", LOG_DIR);
-    attroff(COLOR_PAIR(COLOR_PAIR_INFO));
-
+    /* Legend line */
+    attron(COLOR_PAIR(COLOR_PAIR_DIM));
+    mvprintw(row, 4, "Severity: ");
+    attroff(COLOR_PAIR(COLOR_PAIR_DIM));
     attron(COLOR_PAIR(COLOR_PAIR_GOOD) | A_BOLD);
     printw("INFO");
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_GOOD));
+    attron(COLOR_PAIR(COLOR_PAIR_DIM));
     printw(" | ");
+    attroff(COLOR_PAIR(COLOR_PAIR_DIM));
     attron(COLOR_PAIR(COLOR_PAIR_WARNING) | A_BOLD);
     printw("WARN");
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_WARNING));
+    attron(COLOR_PAIR(COLOR_PAIR_DIM));
     printw(" | ");
+    attroff(COLOR_PAIR(COLOR_PAIR_DIM));
     attron(COLOR_PAIR(COLOR_PAIR_CRITICAL) | A_BOLD);
     printw("ERROR");
     attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_CRITICAL));
-    printw("  (Up/Down: scroll  r: refresh)");
+    attron(COLOR_PAIR(COLOR_PAIR_DIM));
+    printw("  [Up/Down] scroll  [r] refresh  [q] quit");
+    attroff(COLOR_PAIR(COLOR_PAIR_DIM));
     row++;
 
     /* Column header */
-    attron(A_BOLD | A_UNDERLINE);
+    attron(COLOR_PAIR(COLOR_PAIR_HEADER) | A_BOLD | A_UNDERLINE);
     mvprintw(row++, 2, "%-8s  %-13s  %s", "Time", "Source", "Message");
-    attroff(A_BOLD | A_UNDERLINE);
+    attroff(A_BOLD | A_UNDERLINE | COLOR_PAIR(COLOR_PAIR_HEADER));
 
-    if (row <= max_row)
-        mvhline(row++, 2, ACS_HLINE, cols - 4);
+    if (row <= max_row) {
+        attron(COLOR_PAIR(COLOR_PAIR_BORDER));
+        mvhline(row++, 0, '-', cols);
+        attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
+    }
 
     /* ── Load logs ── */
     g_line_count = 0;
@@ -258,10 +291,18 @@ void panel_logs_render(const mon_snapshot_t *s, int y, int h, int cols, int scro
     }
 
     /* ── Scroll indicator ── */
-    if (total > visible && row <= max_row) {
-        attron(COLOR_PAIR(COLOR_PAIR_INFO));
-        mvprintw(row, 2, "-- %d/%d lines  (scroll: %d) ", total - scroll, total, scroll);
-        attroff(COLOR_PAIR(COLOR_PAIR_INFO));
+    if (row <= max_row) {
+        attron(COLOR_PAIR(COLOR_PAIR_BORDER));
+        mvhline(row, 0, '-', cols);
+        attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
+        attron(COLOR_PAIR(COLOR_PAIR_DIM));
+        if (total > visible)
+            mvprintw(row, 2, " lines %d-%d of %d  [Up/Down to scroll] ",
+                     start + 1, start + visible, total);
+        else
+            mvprintw(row, 2, " %d line%s  [all visible] ",
+                     total, total == 1 ? "" : "s");
+        attroff(COLOR_PAIR(COLOR_PAIR_DIM));
     }
 }
 

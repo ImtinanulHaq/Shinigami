@@ -8,22 +8,41 @@
 #include <stdio.h>
 #include <string.h>
 
-static void draw_pct_bar(int y, int x, int width, float pct, int ok_col, int warn_col, int crit_col)
+static void draw_pct_bar(int y, int x, int width, float pct,
+                         int ok_col, int warn_col, int crit_col)
 {
     if (width <= 2) return;
     int inner = width - 2;
-    int filled = (int)(pct / 100.0f * inner);
-    if (filled < 0) filled = 0;
+    int filled = (int)(pct / 100.0f * inner + 0.5f);
+    if (filled < 0)     filled = 0;
     if (filled > inner) filled = inner;
 
-    int col = (pct >= 90.0f) ? crit_col : (pct >= 70.0f) ? warn_col : ok_col;
+    int col = (pct >= 90.0f) ? crit_col
+            : (pct >= 70.0f) ? warn_col
+            :                   ok_col;
 
+    /* Opening bracket */
+    attron(COLOR_PAIR(COLOR_PAIR_BORDER));
     mvaddch(y, x, '[');
-    attron(COLOR_PAIR(col));
-    for (int i = 0; i < inner; i++)
-        mvaddch(y, x + 1 + i, i < filled ? '#' : '.');
-    attroff(COLOR_PAIR(col));
+    attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
+
+    /* Filled: inverted solid block — works on every terminal */
+    for (int i = 0; i < inner; i++) {
+        if (i < filled) {
+            attron(COLOR_PAIR(col) | A_REVERSE | A_BOLD);
+            mvaddch(y, x + 1 + i, ' ');
+            attroff(A_BOLD | A_REVERSE | COLOR_PAIR(col));
+        } else {
+            attron(COLOR_PAIR(COLOR_PAIR_BORDER));
+            mvaddch(y, x + 1 + i, '-');
+            attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
+        }
+    }
+
+    /* Closing bracket */
+    attron(COLOR_PAIR(COLOR_PAIR_BORDER));
     mvaddch(y, x + 1 + inner, ']');
+    attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
 }
 
 void panel_memory_render(const mon_snapshot_t *s, int y, int h, int cols, int scroll)
@@ -33,11 +52,16 @@ void panel_memory_render(const mon_snapshot_t *s, int y, int h, int cols, int sc
 
 #define CHK if (row > max_row) return
 
-    /* ── System memory ─────────────────────────────────────────── */
-    attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "-- System Memory ");
-    mvhline(row, 19, ACS_HLINE, cols - 21);
-    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
+    /* ── System memory section header ─────────────────────────── */
+    attron(COLOR_PAIR(COLOR_PAIR_BORDER) | A_BOLD);
+    mvprintw(row, 0, "|");
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_BORDER));
+    attron(COLOR_PAIR(COLOR_PAIR_HEADER) | A_BOLD);
+    mvprintw(row, 2, "-- SYSTEM MEMORY ");
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_HEADER));
+    attron(COLOR_PAIR(COLOR_PAIR_BORDER));
+    mvhline(row, 19, '-', cols - 21);
+    attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
     row++;
 
     uint64_t ram_total = s->sysinfo.ram_total_bytes;
@@ -49,36 +73,64 @@ void panel_memory_render(const mon_snapshot_t *s, int y, int h, int cols, int sc
     float swap_pct = swap_tot   ? (float)swap_used  * 100.0f / (float)swap_tot   : 0.0f;
 
     CHK;
+    attron(COLOR_PAIR(COLOR_PAIR_DIM) | A_BOLD);
     mvprintw(row, 4, "RAM  ");
-    draw_pct_bar(row, 9, 40, ram_pct, COLOR_PAIR_GOOD, COLOR_PAIR_WARNING, COLOR_PAIR_CRITICAL);
-    mvprintw(row, 51, " %6lu / %6lu MB  (%.1f%%)",
-             ram_used / (1024*1024), ram_total / (1024*1024), (double)ram_pct);
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_DIM));
+    draw_pct_bar(row, 9, 44, ram_pct, COLOR_PAIR_GOOD, COLOR_PAIR_WARNING, COLOR_PAIR_CRITICAL);
+    attron(COLOR_PAIR(COLOR_PAIR_GOOD) | A_BOLD);
+    mvprintw(row, 55, " %lu / %lu MB",
+             (unsigned long)(ram_used / (1024*1024)),
+             (unsigned long)(ram_total / (1024*1024)));
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_GOOD));
+    attron(COLOR_PAIR(COLOR_PAIR_DIM));
+    printw("  (%.1f%%)", (double)ram_pct);
+    attroff(COLOR_PAIR(COLOR_PAIR_DIM));
     row++;
 
     CHK;
+    attron(COLOR_PAIR(COLOR_PAIR_DIM) | A_BOLD);
     mvprintw(row, 4, "Swap ");
-    draw_pct_bar(row, 9, 40, swap_pct, COLOR_PAIR_GOOD, COLOR_PAIR_WARNING, COLOR_PAIR_CRITICAL);
-    mvprintw(row, 51, " %6lu / %6lu MB  (%.1f%%)",
-             swap_used / (1024*1024), swap_tot / (1024*1024), (double)swap_pct);
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_DIM));
+    draw_pct_bar(row, 9, 44, swap_pct, COLOR_PAIR_GOOD, COLOR_PAIR_WARNING, COLOR_PAIR_CRITICAL);
+    attron(COLOR_PAIR(COLOR_PAIR_GOOD) | A_BOLD);
+    mvprintw(row, 55, " %lu / %lu MB",
+             (unsigned long)(swap_used / (1024*1024)),
+             (unsigned long)(swap_tot / (1024*1024)));
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_GOOD));
+    attron(COLOR_PAIR(COLOR_PAIR_DIM));
+    printw("  (%.1f%%)", (double)swap_pct);
+    attroff(COLOR_PAIR(COLOR_PAIR_DIM));
     row++;
 
     if (s->sysinfo.fd_used || s->sysinfo.fd_max) {
         CHK;
         float fd_pct = s->sysinfo.fd_max ? (float)s->sysinfo.fd_used * 100.0f / s->sysinfo.fd_max : 0;
+        attron(COLOR_PAIR(COLOR_PAIR_DIM) | A_BOLD);
         mvprintw(row, 4, "FDs  ");
-        draw_pct_bar(row, 9, 40, fd_pct, COLOR_PAIR_GOOD, COLOR_PAIR_WARNING, COLOR_PAIR_CRITICAL);
-        mvprintw(row, 51, " %6u / %6u       (%.1f%%)",
-                 s->sysinfo.fd_used, s->sysinfo.fd_max, (double)fd_pct);
+        attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_DIM));
+        draw_pct_bar(row, 9, 44, fd_pct, COLOR_PAIR_GOOD, COLOR_PAIR_WARNING, COLOR_PAIR_CRITICAL);
+        attron(COLOR_PAIR(COLOR_PAIR_GOOD) | A_BOLD);
+        mvprintw(row, 55, " %u / %u",
+                 s->sysinfo.fd_used, s->sysinfo.fd_max);
+        attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_GOOD));
+        attron(COLOR_PAIR(COLOR_PAIR_DIM));
+        printw("  (%.1f%%)", (double)fd_pct);
+        attroff(COLOR_PAIR(COLOR_PAIR_DIM));
         row++;
     }
     row++;
 
-    /* ── Memory pools ──────────────────────────────────────────── */
+    /* ── Memory pools section header ───────────────────────── */
     CHK;
-    attron(COLOR_PAIR(COLOR_PAIR_INFO) | A_BOLD);
-    mvprintw(row, 2, "-- Memory Pools (%u) ", s->pool_count);
-    mvhline(row, 22, ACS_HLINE, cols - 24);
-    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_INFO));
+    attron(COLOR_PAIR(COLOR_PAIR_BORDER) | A_BOLD);
+    mvprintw(row, 0, "|");
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_BORDER));
+    attron(COLOR_PAIR(COLOR_PAIR_HEADER) | A_BOLD);
+    mvprintw(row, 2, "-- MEMORY POOLS (%u) ", s->pool_count);
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_HEADER));
+    attron(COLOR_PAIR(COLOR_PAIR_BORDER));
+    mvhline(row, 22, '-', cols - 24);
+    attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
     row++;
 
     if (s->pool_count == 0) {
@@ -89,11 +141,13 @@ void panel_memory_render(const mon_snapshot_t *s, int y, int h, int cols, int sc
 
     /* Column header */
     CHK;
-    attron(A_BOLD);
+    attron(COLOR_PAIR(COLOR_PAIR_HEADER) | A_BOLD);
     mvprintw(row++, 4, "%-20s %8s %8s %8s %8s %8s %8s %10s",
              "Pool", "BlkSz", "Total", "Used", "Free", "Peak", "Usage%", "Alloc/s");
-    attroff(A_BOLD);
-    mvhline(row++, 4, ACS_HLINE, cols - 6);
+    attroff(A_BOLD | COLOR_PAIR(COLOR_PAIR_HEADER));
+    attron(COLOR_PAIR(COLOR_PAIR_BORDER));
+    mvhline(row++, 4, '-', cols - 6);
+    attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
 
     int shown = 0;
     for (uint32_t i = 0; i < POOL_MAX; i++) {
@@ -116,13 +170,19 @@ void panel_memory_render(const mon_snapshot_t *s, int y, int h, int cols, int sc
 
         /* Usage bar */
         CHK;
+        attron(COLOR_PAIR(COLOR_PAIR_DIM));
         mvprintw(row, 6, "Usage ");
-        draw_pct_bar(row, 12, 32, p->usage_pct, COLOR_PAIR_GOOD, COLOR_PAIR_WARNING, COLOR_PAIR_CRITICAL);
-        mvprintw(row, 46, "  fail:%llu  frag:%.1f%%",
+        attroff(COLOR_PAIR(COLOR_PAIR_DIM));
+        draw_pct_bar(row, 12, 36, p->usage_pct, COLOR_PAIR_GOOD, COLOR_PAIR_WARNING, COLOR_PAIR_CRITICAL);
+        attron(COLOR_PAIR(COLOR_PAIR_DIM));
+        mvprintw(row, 50, "  fail:%llu  frag:%.1f%%",
                  (unsigned long long)p->fail_count, (double)p->fragmentation_pct);
+        attroff(COLOR_PAIR(COLOR_PAIR_DIM));
         row++;
 
-        mvhline(row++, 6, ACS_HLINE, cols - 8);
+        attron(COLOR_PAIR(COLOR_PAIR_BORDER));
+        mvhline(row++, 6, '-', cols - 8);
+        attroff(COLOR_PAIR(COLOR_PAIR_BORDER));
     }
 #undef CHK
 }
