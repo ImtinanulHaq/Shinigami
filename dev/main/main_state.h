@@ -7,14 +7,12 @@
 
 #include <time.h>
 #include <pthread.h>
-#include "terminal/term_layout.h"
 
 /**
  * Global application state.
  */
 typedef struct {
-    /* Layout and UI state */
-    term_layout_t layout;
+    /* UI state */
     int active_tab;
     int running;
     int resize_needed;

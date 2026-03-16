@@ -1,190 +1,156 @@
 /**
- * @file    main_loop.c
- * @brief   Main event loop implementation.
+ * Main event loop - Single screen with BANKAI and command input
  */
 #include "main_loop.h"
-#include "main_state.h"
-#include "main_signals.h"
-#include "terminal/term_engine.h"
-#include "terminal/term_layout.h"
-#include "terminal/term_input.h"
-#include "terminal/term_cmd.h"
-#include "terminal/term_colors.h"
-#include "panels/panel_dashboard.h"
-#include "panels/panel_services.h"
-#include "panels/panel_proxies.h"
-#include "panels/panel_security.h"
-#include "panels/panel_hal.h"
-#include "panels/panel_logs.h"
-#include "panels/panel_monitor.h"
-#include "panels/panel_help.h"
+#include "cmd_handlers.h"
 #include "connectors/conn_sm.h"
 #include "connectors/conn_monitor.h"
-#include "main_config.h"
-#include <time.h>
-#include <sys/time.h>
+#include <ncurses.h>
+#include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
+#include <stdio.h>
 
-/**
- * Run main event loop.
- */
-int main_loop_run(void)
+static int g_running = 1;
+static int g_max_y = 0, g_max_x = 0;
+static int g_sm_connected = 0;
+static int g_monitor_connected = 0;
+
+static void display_screen(const char *output)
 {
-    while (g_state.running) {
-        if (main_loop_iterate() != 0) {
-            return -1;
+    clear();
+    getmaxyx(stdscr, g_max_y, g_max_x);
+
+    attron(COLOR_PAIR(1) | A_BOLD);
+    mvprintw(g_max_y / 4, (g_max_x - 6) / 2, "BANKAI");
+    attroff(COLOR_PAIR(1) | A_BOLD);
+
+    if (output && strlen(output) > 0) {
+        attron(COLOR_PAIR(2));
+        const char *ptr = output;
+        int y = g_max_y / 2;
+        
+        while (*ptr && y < g_max_y - 3) {
+            const char *newline = strchr(ptr, '\n');
+            int len = newline ? (int)(newline - ptr) : (int)strlen(ptr);
+            mvprintw(y++, 2, "%.*s", len, ptr);
+            ptr = newline ? (newline + 1) : (ptr + len);
         }
+        attroff(COLOR_PAIR(2));
     }
-    return 0;
+
+    attron(COLOR_PAIR(1));
+    mvprintw(g_max_y - 2, 2, ">>> ");
+    attroff(COLOR_PAIR(1));
+    refresh();
 }
 
-/**
- * One iteration of main loop.
- */
-int main_loop_iterate(void)
+static int read_command(char *cmd_buf, int bufsize)
 {
-    /* Check for resize */
-    if (g_state.resize_needed) {
-        if (term_engine_check_size() != 0) {
-            return -1;  /* Terminal too small */
-        }
+    int pos = 0;
+    memset(cmd_buf, 0, bufsize);
 
-        if (term_layout_on_resize(&g_state.layout) != 0) {
-            return -1;  /* Layout rebuild failed */
-        }
-
-        g_state.resize_needed = 0;
-    }
-
-    /* Try to connect to services if not connected */
-    if (!conn_sm_is_connected()) {
-        conn_sm_connect();
-    }
-
-    if (!conn_monitor_is_connected()) {
-        conn_monitor_connect();
-    }
-
-    /* Poll for keyboard input (non-blocking) */
-    int ch = term_input_getch_nonblock();
-    if (ch != -1) {
-        int tab_out = -1;
-        
-        /* Handle command palette input */
-        if (g_state.cmd_palette_visible) {
-            if (ch == 27) {  /* ESC to cancel */
-                g_state.cmd_palette_visible = 0;
-                g_state.cmd_input_len = 0;
-                g_state.cmd_input[0] = '\0';
-            } else if (ch == 10 || ch == 13) {  /* Enter to execute */
-                term_cmd_execute(g_state.cmd_input);
-                g_state.cmd_palette_visible = 0;
-                g_state.cmd_input_len = 0;
-                g_state.cmd_input[0] = '\0';
-            } else if (ch == KEY_BACKSPACE || ch == 127) {  /* Backspace */
-                if (g_state.cmd_input_len > 0) {
-                    g_state.cmd_input_len--;
-                    g_state.cmd_input[g_state.cmd_input_len] = '\0';
-                }
-            } else if (ch >= 32 && ch < 127) {  /* Printable ASCII */
-                if (g_state.cmd_input_len < (int)sizeof(g_state.cmd_input) - 1) {
-                    g_state.cmd_input[g_state.cmd_input_len++] = (char)ch;
-                    g_state.cmd_input[g_state.cmd_input_len] = '\0';
-                }
-            }
-            return 0;  /* Don't process other input while in command mode */
-        }
-        
-        int input_result = term_input_handle_key(ch, &tab_out);
-
-        if (input_result == -1) {
-            /* Exit signal */
-            g_state.running = 0;
+    while (pos < bufsize - 1) {
+        int ch = getch();
+        if (ch == 10 || ch == 13) {
             return 0;
         }
-
-        if (input_result == 0) {
-            /* Handled as tab switch */
-            if (tab_out == -2) {
-                /* Next tab */
-                term_layout_next_tab(&g_state.layout);
-                g_state.active_tab = term_layout_get_active_tab(&g_state.layout);
-            } else if (tab_out == -3) {
-                /* Prev tab */
-                term_layout_prev_tab(&g_state.layout);
-                g_state.active_tab = term_layout_get_active_tab(&g_state.layout);
-            } else if (tab_out >= 0) {
-                /* Direct tab number (1-8 -> 0-7) */
-                term_layout_switch_tab(&g_state.layout, tab_out);
-                g_state.active_tab = term_layout_get_active_tab(&g_state.layout);
+        if (ch == 27) {
+            return -1;
+        }
+        if (ch == KEY_BACKSPACE || ch == 127) {
+            if (pos > 0) {
+                pos--;
+                mvprintw(g_max_y - 2, 6 + pos, " ");
+                move(g_max_y - 2, 6 + pos);
+                refresh();
             }
+            continue;
+        }
+        if (ch >= 32 && ch < 127) {
+            cmd_buf[pos] = (char)ch;
+            mvaddch(g_max_y - 2, 6 + pos, (unsigned char)ch);
+            refresh();
+            pos++;
+        }
+    }
+    return 0;
+}
+
+int main_loop_init(void)
+{
+    initscr();
+    if (!has_colors()) {
+        endwin();
+        fprintf(stderr, "[ERROR] No color support\n");
+        return -1;
+    }
+
+    start_color();
+    init_pair(1, COLOR_RED, COLOR_BLACK);
+    init_pair(2, COLOR_WHITE, COLOR_BLACK);
+
+    cbreak();
+    noecho();
+    nodelay(stdscr, FALSE);
+    keypad(stdscr, TRUE);
+
+    /* Try to connect to Service Manager (retry 3 times) */
+    for (int i = 0; i < 3; i++) {
+        if (conn_sm_connect() == 0) {
+            g_sm_connected = 1;
+            break;
+        }
+        if (i < 2) {
+            usleep(200000); /* 200ms between retries */
+        }
+    }
+
+    /* Try to connect to Monitor */
+    conn_monitor_connect();
+    if (conn_monitor_get_cached_snapshot() != NULL) {
+        g_monitor_connected = 1;
+    }
+
+    g_running = 1;
+    return 0;
+}
+
+int main_loop_run(void)
+{
+    char cmd_buf[512];
+    char output_buf[8192];
+    memset(output_buf, 0, sizeof(output_buf));
+    
+    /* Show startup message with connection status */
+    char status_sm = g_sm_connected ? '+' : '-';
+    char status_mon = g_monitor_connected ? '+' : '-';
+    
+    snprintf(output_buf, sizeof(output_buf),
+        "SHINIGAMI TERMINAL v1.0\n"
+        "Middleware Control Interface\n\n"
+        "[%c] Service Manager\n"
+        "[%c] Monitor\n\n"
+        "Type 'help' for available commands",
+        status_sm, status_mon);
+    while (g_running) {
+        display_screen(output_buf);
+
+        if (read_command(cmd_buf, sizeof(cmd_buf)) == 0 && strlen(cmd_buf) > 0) {
+            memset(output_buf, 0, sizeof(output_buf));
+            cmd_handler_execute(cmd_buf, output_buf, sizeof(output_buf));
         }
 
-        /* Handle command palette (':') */
-        if (ch == ':') {
-            g_state.cmd_palette_visible = 1;
-            g_state.cmd_input_len = 0;
-            g_state.cmd_input[0] = '\0';
-        }
-        /* TODO: Pass remaining input to active panel */
+        usleep(50000);
     }
-
-    /* Try to receive monitor snapshot (non-blocking) */
-    conn_monitor_snapshot_t snap;
-    if (conn_monitor_recv_snapshot(&snap) > 0) {
-        /* TODO: Update panel data from snapshot */
-    }
-
-    /* Render all panels */
-    wclear(g_state.layout.main_win);
-
-    switch (g_state.active_tab) {
-        case MAIN_PANEL_DASHBOARD:
-            panel_dashboard_render(g_state.layout.main_win);
-            break;
-        case MAIN_PANEL_SERVICES:
-            panel_services_render(g_state.layout.main_win);
-            break;
-        case MAIN_PANEL_PROXIES:
-            panel_proxies_render(g_state.layout.main_win);
-            break;
-        case MAIN_PANEL_SECURITY:
-            panel_security_render(g_state.layout.main_win);
-            break;
-        case MAIN_PANEL_HAL:
-            panel_hal_render(g_state.layout.main_win);
-            break;
-        case MAIN_PANEL_LOGS:
-            panel_logs_render(g_state.layout.main_win);
-            break;
-        case MAIN_PANEL_MONITOR:
-            panel_monitor_render(g_state.layout.main_win);
-            break;
-        case MAIN_PANEL_HELP:
-            panel_help_render(g_state.layout.main_win);
-            break;
-    }
-
-    /* Update layout (tabs, topbar, bottombar) */
-    term_layout_refresh(&g_state.layout);
-
-    /* Display command input overlay if active */
-    if (g_state.cmd_palette_visible) {
-        term_layout_show_command_input(g_state.layout.main_win, 
-                                      g_state.cmd_input, 
-                                      g_state.cmd_input_len);
-    }
-
-    /* Rate limit: refresh at MAIN_REFRESH_MS */
-    usleep(MAIN_REFRESH_MS * 1000);
 
     return 0;
 }
 
-/**
- * Stop the main loop.
- */
-void main_loop_stop(void)
+void main_loop_shutdown(void)
 {
-    g_state.running = 0;
+    conn_sm_disconnect();
+    conn_monitor_disconnect();
+    endwin();
+    g_running = 0;
 }
