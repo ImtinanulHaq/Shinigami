@@ -4,6 +4,7 @@
  */
 #include "term_colors.h"
 #include <ncurses.h>
+#include <stdio.h>
 
 /**
  * Initialize all ncurses color pairs for the RED theme.
@@ -11,7 +12,9 @@
 int term_colors_init(void)
 {
     if (!has_colors()) {
-        return -1;
+        /* Colors not supported, but application can continue */
+        fprintf(stderr, "WARNING: Terminal does not support colors (continuing anyway)\n");
+        return 0;  /* Don't fail, just continue without colors */
     }
 
     start_color();

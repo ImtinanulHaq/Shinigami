@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
+#include <stdio.h>
 
 static WINDOW *g_root_win = NULL;
 
@@ -19,6 +20,7 @@ int term_engine_init(void)
     /* Initialize ncurses */
     g_root_win = initscr();
     if (!g_root_win) {
+        fprintf(stderr, "ERROR: initscr() failed\n");
         return -1;
     }
 
@@ -32,12 +34,16 @@ int term_engine_init(void)
     /* Check and initialize colors */
     if (term_colors_init() != 0) {
         endwin();
+        fprintf(stderr, "ERROR: Color initialization failed\n");
         return -1;
     }
 
     /* Verify terminal size */
     if (term_engine_check_size() != 0) {
+        int cols = 0, rows = 0;
+        getmaxyx(stdscr, rows, cols);
         endwin();
+        fprintf(stderr, "ERROR: Terminal too small: %dx%d (need 100x28)\n", cols, rows);
         return -1;
     }
 
