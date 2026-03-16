@@ -33,7 +33,7 @@
 /* ──────────────────────────────────────────────────────────────────────── */
 /* TIMING (milliseconds unless stated) */
 /* ──────────────────────────────────────────────────────────────────────── */
-#define MAIN_REFRESH_MS           50        /**< 20 fps (smoother, less blinking) */
+#define MAIN_REFRESH_MS           100       /**< 10 fps (very smooth, no flicker) */
 #define MAIN_SM_TIMEOUT_MS        500       /**< SM socket read timeout */
 #define MAIN_MONITOR_TIMEOUT_MS   1000      /**< Monitor socket read timeout */
 #define MAIN_STATUS_MSG_DURATION  3000      /**< Auto-clear status after ms */
