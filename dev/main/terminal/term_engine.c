@@ -17,25 +17,30 @@ static WINDOW *g_root_win = NULL;
  */
 int term_engine_init(void)
 {
-    /* Initialize ncurses */
+    /* Initialize ncurses with terminal type detection */
     g_root_win = initscr();
     if (!g_root_win) {
-        fprintf(stderr, "ERROR: initscr() failed\n");
+        fprintf(stderr, "ERROR: initscr() failed - ncurses initialization\n");
+        fprintf(stderr, "Ensure TERM environment variable is set\n");
         return -1;
     }
 
-    /* Configure ncurses */
+    /* Configure ncurses for all terminal types */
     cbreak();                   /* Line buffering disabled */
     noecho();                   /* Don't echo input */
     keypad(stdscr, TRUE);       /* Enable function keys */
     nodelay(stdscr, TRUE);      /* Non-blocking getch() */
+    notimeout(stdscr, TRUE);    /* Don't timeout on function keys */
     curs_set(0);                /* Hide cursor */
+    
+    /* Set default terminal attributes */
+    term_clear_attrib();
 
     /* Check and initialize colors */
     if (term_colors_init() != 0) {
         endwin();
         fprintf(stderr, "ERROR: Color initialization failed\n");
-        return -1;
+        fprintf(stderr, "Continuing with monochrome mode...\n");
     }
 
     /* Verify terminal size */
@@ -86,12 +91,13 @@ void term_engine_get_size(int *cols, int *rows)
 }
 
 /**
- * Refresh all panels and update display.
+ * Refresh all panels and update display (optimized).
  */
 void term_engine_refresh(void)
 {
+    /* Update panels and redraw only changed areas */
     update_panels();
-    doupdate();
+    doupdate();  /* Use optimized update instead of wrefresh() */
 }
 
 /**
@@ -182,4 +188,17 @@ void term_engine_delwin(WINDOW *w, PANEL *p)
     if (w) {
         delwin(w);
     }
+}
+
+/**
+ * Clear all text attributes and renditions.
+ */
+void term_clear_attrib(void)
+{
+    attroff(A_BOLD);
+    attroff(A_DIM);
+    attroff(A_STANDOUT);
+    attroff(A_UNDERLINE);
+    attroff(A_BLINK);
+    attroff(A_REVERSE);
 }

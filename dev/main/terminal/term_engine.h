@@ -63,4 +63,9 @@ WINDOW *term_engine_newwin(int h, int w, int y, int x);
  */
 void term_engine_delwin(WINDOW *w, PANEL *p);
 
+/**
+ * Clear all text attributes and renditions.
+ */
+void term_clear_attrib(void);
+
 #endif

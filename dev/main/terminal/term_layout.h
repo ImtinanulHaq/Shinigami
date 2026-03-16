@@ -85,6 +85,11 @@ int term_layout_on_resize(term_layout_t *layout);
 void term_layout_refresh(term_layout_t *layout);
 
 /**
+ * Display command input overlay at bottom of screen.
+ */
+void term_layout_show_command_input(WINDOW *win, const char *cmd_buffer, int cmd_len);
+
+/**
  * Get the window for the main content area (where panels draw).
  */
 WINDOW *term_layout_get_main_win(term_layout_t *layout);

@@ -186,6 +186,34 @@ void term_layout_draw_bottombar(term_layout_t *layout)
 }
 
 /**
+ * Display command input overlay at bottom of screen.
+ */
+void term_layout_show_command_input(WINDOW *win, const char *cmd_buffer, int cmd_len)
+{
+    if (!win) return;
+
+    int h, w;
+    getmaxyx(win, h, w);
+
+    /* Draw separator line above command input */
+    wattron(win, A_BOLD);
+    for (int x = 0; x < w; x++) {
+        mvwaddch(win, h - 2, x, ACS_HLINE);
+    }
+    wattroff(win, A_BOLD);
+
+    /* Draw command input box */
+    wattron(win, COLOR_PAIR(CLR_TOPBAR) | A_BOLD);
+    mvwprintw(win, h - 1, 1, ":%s", cmd_buffer);
+    
+    /* Show cursor position */
+    mvwchgat(win, h - 1, 2 + cmd_len, 1, A_REVERSE, CLR_TOPBAR, NULL);
+    
+    wattroff(win, COLOR_PAIR(CLR_TOPBAR) | A_BOLD);
+    wrefresh(win);
+}
+
+/**
  * Handle terminal resize.
  */
 int term_layout_on_resize(term_layout_t *layout)

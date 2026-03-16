@@ -69,6 +69,32 @@ int main_loop_iterate(void)
     int ch = term_input_getch_nonblock();
     if (ch != -1) {
         int tab_out = -1;
+        
+        /* Handle command palette input */
+        if (g_state.cmd_palette_visible) {
+            if (ch == 27) {  /* ESC to cancel */
+                g_state.cmd_palette_visible = 0;
+                g_state.cmd_input_len = 0;
+                g_state.cmd_input[0] = '\0';
+            } else if (ch == 10 || ch == 13) {  /* Enter to execute */
+                term_cmd_execute(g_state.cmd_input);
+                g_state.cmd_palette_visible = 0;
+                g_state.cmd_input_len = 0;
+                g_state.cmd_input[0] = '\0';
+            } else if (ch == KEY_BACKSPACE || ch == 127) {  /* Backspace */
+                if (g_state.cmd_input_len > 0) {
+                    g_state.cmd_input_len--;
+                    g_state.cmd_input[g_state.cmd_input_len] = '\0';
+                }
+            } else if (ch >= 32 && ch < 127) {  /* Printable ASCII */
+                if (g_state.cmd_input_len < (int)sizeof(g_state.cmd_input) - 1) {
+                    g_state.cmd_input[g_state.cmd_input_len++] = (char)ch;
+                    g_state.cmd_input[g_state.cmd_input_len] = '\0';
+                }
+            }
+            return 0;  /* Don't process other input while in command mode */
+        }
+        
         int input_result = term_input_handle_key(ch, &tab_out);
 
         if (input_result == -1) {
@@ -94,7 +120,12 @@ int main_loop_iterate(void)
             }
         }
 
-        /* TODO: Handle command palette (':') */
+        /* Handle command palette (':') */
+        if (ch == ':') {
+            g_state.cmd_palette_visible = 1;
+            g_state.cmd_input_len = 0;
+            g_state.cmd_input[0] = '\0';
+        }
         /* TODO: Pass remaining input to active panel */
     }
 
@@ -136,6 +167,13 @@ int main_loop_iterate(void)
 
     /* Update layout (tabs, topbar, bottombar) */
     term_layout_refresh(&g_state.layout);
+
+    /* Display command input overlay if active */
+    if (g_state.cmd_palette_visible) {
+        term_layout_show_command_input(g_state.layout.main_win, 
+                                      g_state.cmd_input, 
+                                      g_state.cmd_input_len);
+    }
 
     /* Rate limit: refresh at MAIN_REFRESH_MS */
     usleep(MAIN_REFRESH_MS * 1000);
