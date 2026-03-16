@@ -227,6 +227,7 @@ add_subdirectory(dev/security)      # capabilities, sandbox, seccomp, verify
 add_subdirectory(dev/services)      # service daemons (audio/camera/gpio/sensor)
 add_subdirectory(dev/proxy)         # C++ proxy library + C bindings
 add_subdirectory(dev/monitoring)    # monitord daemon + TUI
+add_subdirectory(dev/main)          # shinigami-terminal interactive dashboard
 
 # ---------------------------------------------------------------------------
 # Install — install rules are in each subdirectory; here we handle the
